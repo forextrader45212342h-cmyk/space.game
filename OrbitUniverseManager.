@@ -1,0 +1,49 @@
+#pragma once
+
+#include "OrbitUniverseGenerator.h"
+#include "OrbitCelestialGravity.h"
+#include "OrbitInterstellarTravel.h"
+#include "OrbitTimeSystem.h"
+
+#include <cstdint>
+#include <vector>
+
+namespace Orbit
+{
+    class OrbitUniverseManager
+    {
+    public:
+        void Initialize(
+            std::uint64_t universeSeed,
+            std::size_t systemCount);
+
+        void Update(double realDeltaSeconds);
+
+        OrbitStarSystem* GetSystem(
+            std::uint64_t systemId);
+
+        const std::vector<OrbitStarSystem>&
+            GetSystems() const;
+
+        Vector3 CalculateGravity(
+            std::uint64_t systemId,
+            const Vector3& position) const;
+
+        TravelResult CalculateTravel(
+            const Vector3& start,
+            const Vector3& destination,
+            double fractionOfLightSpeed) const;
+
+        OrbitTimeSystem& GetTimeSystem();
+
+    private:
+        std::uint64_t UniverseSeed = 0;
+
+        OrbitUniverseGenerator Generator;
+        OrbitCelestialGravity Gravity;
+        OrbitInterstellarTravel Travel;
+        OrbitTimeSystem Time;
+
+        std::vector<OrbitStarSystem> Systems;
+    };
+}

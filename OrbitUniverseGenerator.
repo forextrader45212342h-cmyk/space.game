@@ -1,0 +1,28 @@
+#pragma once
+
+#include "OrbitStarSystem.h"
+#include "OrbitLifeSystem.h"
+
+#include <cstdint>
+
+namespace Orbit
+{
+    class OrbitUniverseGenerator
+    {
+    public:
+        OrbitStarSystem GenerateSystem(
+            std::uint64_t seed,
+            std::uint64_t systemId) const;
+
+    private:
+        OrbitLifeSystem LifeSystem;
+
+        double RandomRange(
+            std::uint64_t& state,
+            double min,
+            double max) const;
+
+        std::uint64_t NextRandom(
+            std::uint64_t& state) const;
+    };
+}

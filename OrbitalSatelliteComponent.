@@ -1,0 +1,67 @@
+#pragma once
+
+#include "CoreMinimal.h"
+#include "Components/ActorComponent.h"
+#include "OrbitalSatelliteComponent.generated.h"
+
+UCLASS(ClassGroup=(Orbit), meta=(BlueprintSpawnableComponent))
+class PROJECTORBIT_API UOrbitalSatelliteComponent
+    : public UActorComponent
+{
+    GENERATED_BODY()
+
+public:
+    UOrbitalSatelliteComponent();
+
+    UPROPERTY(
+        EditAnywhere,
+        BlueprintReadWrite,
+        Category="Orbit")
+    FVector PlanetCenterCm =
+        FVector::ZeroVector;
+
+    UPROPERTY(
+        EditAnywhere,
+        BlueprintReadWrite,
+        Category="Orbit")
+    double OrbitRadiusCm =
+        677100000.0;
+
+    UPROPERTY(
+        EditAnywhere,
+        BlueprintReadWrite,
+        Category="Orbit")
+    double OrbitalPeriodSeconds =
+        5400.0;
+
+    UPROPERTY(
+        EditAnywhere,
+        BlueprintReadWrite,
+        Category="Orbit")
+    float InclinationDegrees =
+        51.6f;
+
+    UPROPERTY(
+        EditAnywhere,
+        BlueprintReadWrite,
+        Category="Orbit")
+    float PhaseDegrees =
+        0.0f;
+
+    UFUNCTION(BlueprintCallable, Category="Orbit")
+    void SetOrbit(
+        double RadiusCm,
+        double PeriodSeconds);
+
+protected:
+    virtual void BeginPlay() override;
+
+    virtual void TickComponent(
+        float DeltaTime,
+        ELevelTick TickType,
+        FActorComponentTickFunction*
+        ThisTickFunction) override;
+
+private:
+    double ElapsedSeconds = 0.0;
+};
