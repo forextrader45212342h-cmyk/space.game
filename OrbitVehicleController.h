@@ -1,119 +1,106 @@
 // OrbitVehicleController.h
 // ---------------
 // UE5 C++ header for a futuristic spaceship flight controller.
-// Handles thruster vectors, acceleration, and speed limits.
+// Handles thruster vectors, speed limits, and physics integration.
 //
 // Author: Principal UE5 C++ Engineer
-// Date:   2026-10-04
+// Date: 2026-10-04
 // -------------------------------------------------------------------------
 
 #pragma once
 
 #include "CoreMinimal.h"
-#include "Components/ActorComponent.h"
+#include "GameFramework/Pawn.h"
 #include "OrbitVehicleController.generated.h"
 
 /**
- *  Struct that represents a single thruster on the ship.
- *  - Direction is always in local space.
- *  - Throttle ranges from 0.0 to 1.0.
- *  - MaxForce is the maximum force this thruster can apply.
+ *  A lightweight component that drives a spaceship using thruster vectors.
+ *  The controller exposes a set of configurable parameters that can be tweaked
+ *  in the editor or via C++ code.  It is intentionally lightweight so that
+ *  it can be used on low‑end hardware or as a base for more complex
+ *  flight systems.
  */
-USTRUCT(BlueprintType)
-struct FOrbitThruster
-{
-	GENERATED_BODY()
-
-public:
-	/** Local direction of the thrust vector (normalized). */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Thruster")
-	FVector Direction = FVector::ForwardVector;
-
-	/** Current throttle value (0.0 – 1.0). */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Thruster")
-	float Throttle = 0.0f;
-
-	/** Maximum force (in Newtons) that this thruster can produce. */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Thruster")
-	float MaxForce = 1000.0f;
-
-	/** Current force being applied (computed each tick). */
-	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Thruster")
-	float CurrentForce = 0.0f;
-
-	/** Helper to compute the force vector for this thruster. */
-	FORCEINLINE FVector GetForceVector() const
-	{
-		return Direction * CurrentForce;
-	}
-};
-
-/**
- *  Component that controls a spaceship's flight using multiple thrusters.
- *  It handles acceleration, speed limiting, and basic physics integration
- *  (using the owning actor's RootComponent as the physics body).
- */
-UCLASS(ClassGroup = (Custom), meta = (BlueprintSpawnableComponent))
+UCLASS(ClassGroup = (Orbit), meta = (BlueprintSpawnableComponent))
 class ORBIT_API UOrbitVehicleController : public UActorComponent
 {
 	GENERATED_BODY()
 
 public:
-	/** Default constructor. */
+	/** Default constructor */
 	UOrbitVehicleController();
 
-	/** Called every frame. */
+	/** Called every frame */
 	virtual void TickComponent(
 		float DeltaTime,
 		ELevelTick TickType,
 		FActorComponentTickFunction* ThisTickFunction) override;
 
-	/** Apply a throttle value to a specific thruster by index. */
-	UFUNCTION(BlueprintCallable, Category = "Orbit|Thrusters")
-	void SetThrusterThrottle(int32 ThrusterIndex, float Throttle);
+	/** Apply a thrust vector in local space.  The vector is interpreted as
+	 *  a direction and magnitude.  The magnitude is clamped to 1.0f.
+	 */
+	UFUNCTION(BlueprintCallable, Category = "Orbit|Flight")
+	void ApplyLocalThrust(const FVector& LocalThrust);
 
-	/** Add a new thruster to the ship. */
-	UFUNCTION(BlueprintCallable, Category = "Orbit|Thrusters")
-	void AddThruster(const FOrbitThruster& Thruster);
+	/** Apply a thrust vector in world space. */
+	UFUNCTION(BlueprintCallable, Category = "Orbit|Flight")
+	void ApplyWorldThrust(const FVector& WorldThrust);
 
-	/** Clear all thrusters. */
-	UFUNCTION(BlueprintCallable, Category = "Orbit|Thrusters")
-	void ResetThrusters();
+	/** Set the current velocity directly (e.g. for teleportation). */
+	UFUNCTION(BlueprintCallable, Category = "Orbit|Flight")
+	void SetVelocity(const FVector& NewVelocity);
 
-	/** Get the current linear velocity of the ship in world space. */
-	UFUNCTION(BlueprintCallable, Category = "Orbit|Movement")
-	FVector GetVelocity() const;
+	/** Get the current velocity. */
+	UFUNCTION(BlueprintCallable, Category = "Orbit|Flight")
+	FVector GetVelocity() const { return CurrentVelocity; }
 
-	/** Get the current speed (magnitude of velocity). */
-	UFUNCTION(BlueprintCallable, Category = "Orbit|Movement")
-	float GetSpeed() const;
+	/** Set the current orientation directly (e.g. for instant rotation). */
+	UFUNCTION(BlueprintCallable, Category = "Orbit|Flight")
+	void SetOrientation(const FRotator& NewOrientation);
+
+	/** Get the current orientation. */
+	UFUNCTION(BlueprintCallable, Category = "Orbit|Flight")
+	FRotator GetOrientation() const { return CurrentOrientation; }
+
+	/** Reset the controller to its initial state. */
+	UFUNCTION(BlueprintCallable, Category = "Orbit|Flight")
+	void Reset();
 
 protected:
-	/** Called when the game starts. */
+	/** Called when the game starts */
 	virtual void BeginPlay() override;
 
 private:
-	/** All thrusters attached to this ship. */
-	UPROPERTY(EditAnywhere, Category = "Orbit|Thrusters")
-	TArray<FOrbitThruster> Thrusters;
-
-	/** Maximum allowed speed (m/s). */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Orbit|Movement", meta = (ClampMin = "0.0"))
-	float MaxSpeed = 3000.0f;
-
-	/** Maximum acceleration (m/s^2) when all thrusters are at full throttle. */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Orbit|Movement", meta = (ClampMin = "0.0"))
-	float MaxAcceleration = 500.0f;
-
-	/** Current velocity of the ship (world space). */
+	/** Current velocity in world space */
 	FVector CurrentVelocity = FVector::ZeroVector;
 
-	/** Helper to compute the net thrust force from all thrusters. */
-	FVector ComputeNetThrust() const;
+	/** Current orientation (world space) */
+	FRotator CurrentOrientation = FRotator::ZeroRotator;
 
-	/** Helper to clamp velocity to MaxSpeed. */
-	void ClampVelocity();
+	/** Accumulated thrust vector for this frame (world space) */
+	FVector AccumulatedThrust = FVector::ZeroVector;
 
-	/** Reference to the physics body (RootComponent). */
-	UPrimitiveComponent* PhysicsBody = nullptr;
+	/** Maximum speed the ship can reach (units per second) */
+	UPROPERTY(EditAnywhere, Category = "Orbit|Flight")
+	float MaxSpeed = 3000.0f;
+
+	/** Acceleration rate when thrust is applied (units per second squared) */
+	UPROPERTY(EditAnywhere, Category = "Orbit|Flight")
+	float Acceleration = 1500.0f;
+
+	/** Deceleration rate when no thrust is applied (units per second squared) */
+	UPROPERTY(EditAnywhere, Category = "Orbit|Flight")
+	float Deceleration = 800.0f;
+
+	/** Damping factor applied each frame to simulate space drag (0.0 = no drag) */
+	UPROPERTY(EditAnywhere, Category = "Orbit|Flight")
+	float SpaceDrag = 0.01f;
+
+	/** Helper to clamp velocity to MaxSpeed */
+	void ClampSpeed();
+
+	/** Helper to apply accumulated thrust and update velocity */
+	void UpdatePhysics(float DeltaTime);
+
+	/** Helper to apply space drag */
+	void ApplySpaceDrag(float DeltaTime);
 };
