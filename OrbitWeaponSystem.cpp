@@ -1,44 +1,68 @@
 // OrbitWeaponSystem.cpp
-// ---------------
-// UE5 C++ implementation of a laser weapon system that performs a line‑trace,
-// applies damage to hit actors, and records telemetry data about the impact.
+//  UE5 C++ implementation of a laser weapon that performs a line‑trace,
+//  applies damage, and records telemetry for each hit.
 
 #include "OrbitWeaponSystem.h"
+
+#include "GameFramework/Actor.h"
 #include "Engine/World.h"
 #include "DrawDebugHelpers.h"
 #include "Kismet/GameplayStatics.h"
-#include "GameFramework/Actor.h"
 #include "Components/SceneComponent.h"
-#include "OrbitTelemetry.h"
+#include "OrbitDamageInterface.h"          // Custom interface for damageable actors
+#include "OrbitTelemetrySubsystem.h"      // Custom subsystem for telemetry
 
-//////////////////////////////////////////////////////////////////////////
-// UOrbitWeaponSystem
+// -----------------------------------------------------------------------------
+//  UOrbitWeaponSystem
+// -----------------------------------------------------------------------------
 
 UOrbitWeaponSystem::UOrbitWeaponSystem()
 {
-    // Default values
-    DamageAmount = 25.0f;
-    TraceDistance = 10000.0f;
-    bDebugDraw = true;
+    PrimaryComponentTick.bCanEverTick = false;   // Weapon system is event driven
+}
+
+void UOrbitWeaponSystem::BeginPlay()
+{
+    Super::BeginPlay();
+
+    // Cache the owner actor for convenience
+    OwnerActor = GetOwner();
+    if (!OwnerActor)
+    {
+        UE_LOG(LogTemp, Warning, TEXT("OrbitWeaponSystem has no owner!"));
+    }
+
+    // Find the muzzle component (if any)
+    MuzzleComponent = OwnerActor->FindComponentByClass<USceneComponent>();
+    if (!MuzzleComponent)
+    {
+        UE_LOG(LogTemp, Warning, TEXT("OrbitWeaponSystem: No muzzle component found on %s"),
+               *OwnerActor->GetName());
+    }
 }
 
 void UOrbitWeaponSystem::FireLaser()
 {
-    if (!MuzzleComponent)
+    if (!OwnerActor)
     {
-        UE_LOG(LogTemp, Warning, TEXT("OrbitWeaponSystem: MuzzleComponent is null."));
         return;
     }
 
-    const FVector Start = MuzzleComponent->GetComponentLocation();
-    const FVector Forward = MuzzleComponent->GetForwardVector();
-    const FVector End   = Start + Forward * TraceDistance;
+    // Determine start and end points of the laser
+    FVector Start = MuzzleComponent ? MuzzleComponent->GetComponentLocation()
+                                    : OwnerActor->GetActorLocation();
+    FVector Forward = MuzzleComponent ? MuzzleComponent->GetForwardVector()
+                                      : OwnerActor->GetActorForwardVector();
+    FVector End = Start + Forward * MaxLaserRange;
 
+    // Perform the line trace
     FHitResult HitResult;
-    const FCollisionQueryParams QueryParams;
-    QueryParams.AddIgnoredActor(GetOwner()); // Don't hit ourselves
+    FCollisionQueryParams QueryParams;
+    QueryParams.AddIgnoredActor(OwnerActor);
+    QueryParams.bTraceComplex = true;
+    QueryParams.bReturnPhysicalMaterial = false;
 
-    const bool bHit = GetWorld()->LineTraceSingleByChannel(
+    bool bHit = GetWorld()->LineTraceSingleByChannel(
         HitResult,
         Start,
         End,
@@ -46,20 +70,15 @@ void UOrbitWeaponSystem::FireLaser()
         QueryParams
     );
 
-    // Debug visualisation
-    if (bDebugDraw)
-    {
-        const FColor HitColor = bHit ? FColor::Red : FColor::Green;
-        DrawDebugLine(GetWorld(), Start, End, HitColor, false, 1.0f, 0, 1.0f);
-        if (bHit)
-        {
-            DrawDebugSphere(GetWorld(), HitResult.ImpactPoint, 8.0f, 12, FColor::Yellow, false, 1.0f);
-        }
-    }
+    // Visual debug
+    DrawDebugLaser(Start, End, bHit, HitResult);
 
     if (bHit)
     {
+        // Apply damage if the hit actor implements the damage interface
         ApplyDamage(HitResult);
+
+        // Record telemetry
         RecordTelemetry(HitResult);
     }
 }
@@ -72,46 +91,82 @@ void UOrbitWeaponSystem::ApplyDamage(const FHitResult& Hit)
         return;
     }
 
-    UDamageType const* DamageType = UDamageType::StaticClass()->GetDefaultObject<UDamageType>();
-    UGameplayStatics::ApplyPointDamage(
-        HitActor,
-        DamageAmount,
-        Hit.TraceStart - Hit.TraceEnd, // Direction
-        Hit,
-        GetOwner()->GetInstigatorController(),
-        GetOwner(),
-        DamageType
-    );
+    // Check for custom damage interface
+    if (HitActor->GetClass()->ImplementsInterface(UOrbitDamageInterface::StaticClass()))
+    {
+        // Use the interface to apply damage
+        IOrbitDamageInterface::Execute_ApplyDamage(
+            HitActor,
+            DamageAmount,
+            OwnerActor,
+            Hit.ImpactPoint,
+            Hit.ImpactNormal
+        );
+    }
+    else
+    {
+        // Fallback to the standard UE damage system
+        UGameplayStatics::ApplyPointDamage(
+            HitActor,
+            DamageAmount,
+            Hit.TraceStart - Hit.TraceEnd,   // Direction
+            Hit,
+            OwnerActor->GetInstigatorController(),
+            OwnerActor,
+            DamageType
+        );
+    }
 }
 
 void UOrbitWeaponSystem::RecordTelemetry(const FHitResult& Hit)
 {
-    if (!UTelemetrySubsystem::IsAvailable())
-    {
-        return;
-    }
-
-    UTelemetrySubsystem* Telemetry = UTelemetrySubsystem::Get();
+    // Retrieve the telemetry subsystem
+    UOrbitTelemetrySubsystem* Telemetry = GetWorld()->GetSubsystem<UOrbitTelemetrySubsystem>();
     if (!Telemetry)
     {
+        UE_LOG(LogTemp, Warning, TEXT("OrbitWeaponSystem: Telemetry subsystem not found."));
         return;
     }
 
-    FTelemetryEvent Event;
-    Event.EventName = TEXT("LaserHit");
-    Event.Timestamp = FDateTime::UtcNow();
+    // Build a telemetry payload
+    FOrbitTelemetryPayload Payload;
+    Payload.HitActorName = Hit.GetActor() ? Hit.GetActor()->GetName() : TEXT("None");
+    Payload.HitLocation = Hit.ImpactPoint;
+    Payload.HitNormal = Hit.ImpactNormal;
+    Payload.DamageDealt = DamageAmount;
+    Payload.LaserRange = MaxLaserRange;
+    Payload.Timestamp = FDateTime::UtcNow();
 
-    // Basic hit data
-    Event.Data.Add(TEXT("HitActor"), Hit.GetActor()->GetName());
-    Event.Data.Add(TEXT("HitLocation"), Hit.ImpactPoint.ToString());
-    Event.Data.Add(TEXT("DamageDealt"), FString::SanitizeFloat(DamageAmount));
+    // Send the payload
+    Telemetry->RecordLaserHit(Payload);
+}
 
-    // If the hit actor implements a health interface, query remaining health
-    if (Hit.GetActor()->Implements<UHealthInterface>())
+void UOrbitWeaponSystem::DrawDebugLaser(const FVector& Start, const FVector& End, bool bHit, const FHitResult& Hit)
+{
+    FColor LineColor = bHit ? FColor::Red : FColor::Green;
+    float LifeTime = 0.1f; // Short lifetime for visual feedback
+
+    DrawDebugLine(
+        GetWorld(),
+        Start,
+        End,
+        LineColor,
+        false,
+        LifeTime,
+        0,
+        2.0f
+    );
+
+    if (bHit)
     {
-        float RemainingHealth = IHealthInterface::Execute_GetHealth(Hit.GetActor());
-        Event.Data.Add(TEXT("RemainingHealth"), FString::SanitizeFloat(RemainingHealth));
+        DrawDebugSphere(
+            GetWorld(),
+            Hit.ImpactPoint,
+            8.0f,
+            12,
+            FColor::Yellow,
+            false,
+            LifeTime
+        );
     }
-
-    Telemetry->RecordEvent(Event);
 }
