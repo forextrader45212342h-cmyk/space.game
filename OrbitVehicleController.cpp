@@ -1,135 +1,191 @@
 // OrbitVehicleController.cpp
-// 3‑D pitch / yaw / roll physics with gravity resistance and acceleration
-// UE5 C++ – only valid code
+// 3‑D pitch / yaw / roll physics controller with gravity compensation, drag and acceleration
 
 #include "OrbitVehicleController.h"
-#include "GameFramework/PlayerController.h"
-#include "Components/InputComponent.h"
+#include "GameFramework/SpringArmComponent.h"
+#include "Camera/CameraComponent.h"
+#include "Components/StaticMeshComponent.h"
 #include "Engine/World.h"
 #include "DrawDebugHelpers.h"
+
+//////////////////////////////////////////////////////////////////////////
+// AOrbitVehicleController
 
 AOrbitVehicleController::AOrbitVehicleController()
 {
     PrimaryActorTick.bCanEverTick = true;
 
-    // Create a simple capsule component as the root
-    CapsuleComp = CreateDefaultSubobject<UCapsuleComponent>(TEXT("CapsuleComp"));
-    RootComponent = CapsuleComp;
-    CapsuleComp->InitCapsuleSize(42.f, 96.f);
+    // Root component
+    RootComponent = CreateDefaultSubobject<USceneComponent>(TEXT("Root"));
 
-    // Create a static mesh for visual representation
-    MeshComp = CreateDefaultSubobject<UStaticMeshComponent>(TEXT("MeshComp"));
-    MeshComp->SetupAttachment(RootComponent);
+    // Vehicle body
+    VehicleMesh = CreateDefaultSubobject<UStaticMeshComponent>(TEXT("VehicleMesh"));
+    VehicleMesh->SetupAttachment(RootComponent);
+    VehicleMesh->SetSimulatePhysics(true);
+    VehicleMesh->SetEnableGravity(false); // we handle gravity manually
+    VehicleMesh->SetMassOverrideInKg(NAME_None, VehicleMass);
 
-    // Default physics values
-    MaxSpeed = 2000.f;
-    Acceleration = 5000.f;
-    TurnSpeed = 120.f;          // degrees per second
-    RollSpeed = 120.f;
-    Gravity = FVector(0.f, 0.f, -980.f); // Unreal units: cm/s²
-    DragCoefficient = 0.1f;    // simple linear drag
-    bUseGravity = true;
+    // Spring arm for camera
+    SpringArm = CreateDefaultSubobject<USpringArmComponent>(TEXT("SpringArm"));
+    SpringArm->SetupAttachment(VehicleMesh);
+    SpringArm->TargetArmLength = 300.f;
+    SpringArm->bEnableCameraLag = true;
+    SpringArm->CameraLagSpeed = 3.f;
+
+    // Camera
+    Camera = CreateDefaultSubobject<UCameraComponent>(TEXT("Camera"));
+    Camera->SetupAttachment(SpringArm, USpringArmComponent::SocketName);
+    Camera->bUsePawnControlRotation = false;
+
+    // Input flags
+    bIsAccelerating = false;
+    bIsBraking = false;
+    bIsTurningLeft = false;
+    bIsTurningRight = false;
+    bIsPitchUp = false;
+    bIsPitchDown = false;
+    bIsRollLeft = false;
+    bIsRollRight = false;
 }
 
 void AOrbitVehicleController::BeginPlay()
 {
     Super::BeginPlay();
 
-    // Disable default pawn movement
-    GetMovementComponent()->SetActive(false);
-}
-
-void AOrbitVehicleController::SetupPlayerInputComponent(UInputComponent* PlayerInputComponent)
-{
-    Super::SetupPlayerInputComponent(PlayerInputComponent);
-
-    // Pitch / Yaw / Roll
-    PlayerInputComponent->BindAxis("Pitch", this, &AOrbitVehicleController::PitchInput);
-    PlayerInputComponent->BindAxis("Yaw", this, &AOrbitVehicleController::YawInput);
-    PlayerInputComponent->BindAxis("Roll", this, &AOrbitVehicleController::RollInput);
-
-    // Throttle
-    PlayerInputComponent->BindAxis("Throttle", this, &AOrbitVehicleController::ThrottleInput);
+    // Ensure physics is enabled
+    VehicleMesh->SetSimulatePhysics(true);
 }
 
 void AOrbitVehicleController::Tick(float DeltaTime)
 {
     Super::Tick(DeltaTime);
 
-    // Update orientation based on input
-    UpdateRotation(DeltaTime);
+    // 1. Gravity compensation
+    FVector GravityForce = FVector(0.f, 0.f, -VehicleMass * GravityScale);
+    VehicleMesh->AddForce(GravityForce, NAME_None, true);
 
-    // Update velocity based on throttle and drag
-    UpdateVelocity(DeltaTime);
+    // 2. Drag (linear)
+    FVector Velocity = VehicleMesh->GetPhysicsLinearVelocity();
+    FVector DragForce = -DragCoefficient * Velocity;
+    VehicleMesh->AddForce(DragForce, NAME_None, true);
 
-    // Apply gravity if enabled
-    if (bUseGravity)
+    // 3. Acceleration / braking
+    FVector Forward = VehicleMesh->GetForwardVector();
+    if (bIsAccelerating)
     {
-        Velocity += Gravity * DeltaTime;
+        FVector AccelForce = Forward * Acceleration * VehicleMass;
+        VehicleMesh->AddForce(AccelForce, NAME_None, true);
+    }
+    if (bIsBraking)
+    {
+        FVector BrakeForce = -Forward * Acceleration * VehicleMass;
+        VehicleMesh->AddForce(BrakeForce, NAME_None, true);
     }
 
-    // Clamp speed
-    if (Velocity.Size() > MaxSpeed)
+    // 4. Turning (yaw)
+    if (bIsTurningLeft)
     {
-        Velocity = Velocity.GetSafeNormal() * MaxSpeed;
+        FVector Torque = FVector(0.f, 0.f, -TurnTorque);
+        VehicleMesh->AddTorqueInRadians(Torque, NAME_None, true);
+    }
+    if (bIsTurningRight)
+    {
+        FVector Torque = FVector(0.f, 0.f, TurnTorque);
+        VehicleMesh->AddTorqueInRadians(Torque, NAME_None, true);
     }
 
-    // Move actor
-    FVector NewLocation = GetActorLocation() + Velocity * DeltaTime;
-    SetActorLocation(NewLocation, true);
+    // 5. Pitch
+    if (bIsPitchUp)
+    {
+        FVector Torque = VehicleMesh->GetRightVector() * -PitchTorque;
+        VehicleMesh->AddTorqueInRadians(Torque, NAME_None, true);
+    }
+    if (bIsPitchDown)
+    {
+        FVector Torque = VehicleMesh->GetRightVector() * PitchTorque;
+        VehicleMesh->AddTorqueInRadians(Torque, NAME_None, true);
+    }
 
-    // Debug: draw velocity vector
-    DrawDebugLine(GetWorld(), NewLocation, NewLocation + Velocity * 0.1f, FColor::Green, false, -1.f, 0, 2.f);
+    // 6. Roll
+    if (bIsRollLeft)
+    {
+        FVector Torque = VehicleMesh->GetForwardVector() * -RollTorque;
+        VehicleMesh->AddTorqueInRadians(Torque, NAME_None, true);
+    }
+    if (bIsRollRight)
+    {
+        FVector Torque = VehicleMesh->GetForwardVector() * RollTorque;
+        VehicleMesh->AddTorqueInRadians(Torque, NAME_None, true);
+    }
+
+    // 7. Clamp speed
+    float CurrentSpeed = Velocity.Size();
+    if (CurrentSpeed > MaxSpeed)
+    {
+        FVector NewVelocity = Velocity.GetSafeNormal() * MaxSpeed;
+        VehicleMesh->SetPhysicsLinearVelocity(NewVelocity, true);
+    }
 }
 
-void AOrbitVehicleController::PitchInput(float Value)
+//////////////////////////////////////////////////////////////////////////
+// Input binding
+
+void AOrbitVehicleController::SetupPlayerInputComponent(UInputComponent* PlayerInputComponent)
 {
-    PitchInputValue = FMath::Clamp(Value, -1.f, 1.f);
+    Super::SetupPlayerInputComponent(PlayerInputComponent);
+
+    // Movement
+    PlayerInputComponent->BindAction("Accelerate", IE_Pressed, this, &AOrbitVehicleController::StartAccelerate);
+    PlayerInputComponent->BindAction("Accelerate", IE_Released, this, &AOrbitVehicleController::StopAccelerate);
+
+    PlayerInputComponent->BindAction("Brake", IE_Pressed, this, &AOrbitVehicleController::StartBrake);
+    PlayerInputComponent->BindAction("Brake", IE_Released, this, &AOrbitVehicleController::StopBrake);
+
+    // Turning
+    PlayerInputComponent->BindAction("TurnLeft", IE_Pressed, this, &AOrbitVehicleController::StartTurnLeft);
+    PlayerInputComponent->BindAction("TurnLeft", IE_Released, this, &AOrbitVehicleController::StopTurnLeft);
+
+    PlayerInputComponent->BindAction("TurnRight", IE_Pressed, this, &AOrbitVehicleController::StartTurnRight);
+    PlayerInputComponent->BindAction("TurnRight", IE_Released, this, &AOrbitVehicleController::StopTurnRight);
+
+    // Pitch
+    PlayerInputComponent->BindAction("PitchUp", IE_Pressed, this, &AOrbitVehicleController::StartPitchUp);
+    PlayerInputComponent->BindAction("PitchUp", IE_Released, this, &AOrbitVehicleController::StopPitchUp);
+
+    PlayerInputComponent->BindAction("PitchDown", IE_Pressed, this, &AOrbitVehicleController::StartPitchDown);
+    PlayerInputComponent->BindAction("PitchDown", IE_Released, this, &AOrbitVehicleController::StopPitchDown);
+
+    // Roll
+    PlayerInputComponent->BindAction("RollLeft", IE_Pressed, this, &AOrbitVehicleController::StartRollLeft);
+    PlayerInputComponent->BindAction("RollLeft", IE_Released, this, &AOrbitVehicleController::StopRollLeft);
+
+    PlayerInputComponent->BindAction("RollRight", IE_Pressed, this, &AOrbitVehicleController::StartRollRight);
+    PlayerInputComponent->BindAction("RollRight", IE_Released, this, &AOrbitVehicleController::StopRollRight);
 }
 
-void AOrbitVehicleController::YawInput(float Value)
-{
-    YawInputValue = FMath::Clamp(Value, -1.f, 1.f);
-}
+//////////////////////////////////////////////////////////////////////////
+// Input handlers
 
-void AOrbitVehicleController::RollInput(float Value)
-{
-    RollInputValue = FMath::Clamp(Value, -1.f, 1.f);
-}
+void AOrbitVehicleController::StartAccelerate() { bIsAccelerating = true; }
+void AOrbitVehicleController::StopAccelerate()  { bIsAccelerating = false; }
 
-void AOrbitVehicleController::ThrottleInput(float Value)
-{
-    ThrottleInputValue = FMath::Clamp(Value, -1.f, 1.f);
-}
+void AOrbitVehicleController::StartBrake() { bIsBraking = true; }
+void AOrbitVehicleController::StopBrake()  { bIsBraking = false; }
 
-void AOrbitVehicleController::UpdateRotation(float DeltaTime)
-{
-    // Calculate desired rotation change
-    FRotator DeltaRot = FRotator(
-        PitchInputValue * TurnSpeed * DeltaTime,
-        YawInputValue * TurnSpeed * DeltaTime,
-        RollInputValue * RollSpeed * DeltaTime
-    );
+void AOrbitVehicleController::StartTurnLeft()  { bIsTurningLeft = true; }
+void AOrbitVehicleController::StopTurnLeft()   { bIsTurningLeft = false; }
 
-    // Apply rotation
-    FRotator NewRot = GetActorRotation() + DeltaRot;
-    SetActorRotation(NewRot);
-}
+void AOrbitVehicleController::StartTurnRight() { bIsTurningRight = true; }
+void AOrbitVehicleController::StopTurnRight()  { bIsTurningRight = false; }
 
-void AOrbitVehicleController::UpdateVelocity(float DeltaTime)
-{
-    // Forward vector in world space
-    FVector Forward = GetActorForwardVector();
+void AOrbitVehicleController::StartPitchUp()   { bIsPitchUp = true; }
+void AOrbitVehicleController::StopPitchUp()    { bIsPitchUp = false; }
 
-    // Acceleration in forward direction
-    FVector Accel = Forward * ThrottleInputValue * Acceleration;
+void AOrbitVehicleController::StartPitchDown() { bIsPitchDown = true; }
+void AOrbitVehicleController::StopPitchDown()  { bIsPitchDown = false; }
 
-    // Simple linear drag opposing velocity
-    FVector Drag = -DragCoefficient * Velocity;
+void AOrbitVehicleController::StartRollLeft()  { bIsRollLeft = true; }
+void AOrbitVehicleController::StopRollLeft()   { bIsRollLeft = false; }
 
-    // Net acceleration
-    FVector NetAccel = Accel + Drag;
-
-    // Update velocity
-    Velocity += NetAccel * DeltaTime;
-}
+void AOrbitVehicleController::StartRollRight() { bIsRollRight = true; }
+void AOrbitVehicleController::StopRollRight()  { bIsRollRight = false; }
