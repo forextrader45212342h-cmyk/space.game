@@ -3,75 +3,95 @@
 
 #include "CoreMinimal.h"
 #include "Components/ActorComponent.h"
+#include "GameFramework/ProjectileMovementComponent.h"
+#include "TimerManager.h"
 #include "OrbitWeaponSystem.generated.h"
 
 /**
- * Configuration struct for a weapon.
- * Can be edited in the editor or set at runtime.
+ *  A reusable weapon component that handles:
+ *  • Ray‑cast based laser firing
+ *  • Projectile spawning (optional)
+ *  • Cool‑down management
+ *
+ *  The component can be attached to any actor (e.g. a spaceship or a turret).
+ *  It exposes a single public method `FireWeapon()` that will perform a
+ *  line‑trace, spawn a projectile if configured, and apply a cooldown.
  */
-USTRUCT(BlueprintType)
-struct FWeaponConfig
-{
-    GENERATED_BODY()
-
-    /** Damage dealt by the weapon. */
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Weapon")
-    float Damage = 10.f;
-
-    /** Maximum range for raycast weapons. */
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Weapon")
-    float Range = 1000.f;
-
-    /** Time (seconds) between consecutive shots. */
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Weapon")
-    float FireRate = 0.2f;
-
-    /** Projectile class to spawn when bSpawnProjectile is true. */
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Weapon")
-    TSubclassOf<AActor> ProjectileClass;
-
-    /** Particle system used for laser visual effect. */
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Weapon")
-    UParticleSystem* LaserEffect;
-
-    /** Use a raycast to detect hits. */
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Weapon")
-    bool bUseRaycast = true;
-
-    /** Spawn a projectile instead of using raycast. */
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Weapon")
-    bool bSpawnProjectile = false;
-};
-
-/**
- * Component that handles weapon firing, raycasting, projectile spawning,
- * damage application, and cooldown logic.
- */
-UCLASS(ClassGroup = (Custom), meta = (BlueprintSpawnableComponent))
+UCLASS( ClassGroup=(Custom), meta=(BlueprintSpawnableComponent) )
 class ORBIT_API UOrbitWeaponSystem : public UActorComponent
 {
-    GENERATED_BODY()
+	GENERATED_BODY()
 
 public:
-    UOrbitWeaponSystem();
+	UOrbitWeaponSystem();
 
-    /** Called when the game starts. */
-    virtual void BeginPlay() override;
+	/** Called every frame */
+	virtual void TickComponent(
+		float DeltaTime,
+		ELevelTick TickType,
+		FActorComponentTickFunction* ThisTickFunction) override;
 
-    /** Called every frame. Handles cooldown timing. */
-    virtual void TickComponent(float DeltaTime, ELevelTick TickType, FActorComponentTickFunction* ThisTickFunction) override;
+	/** Fire the weapon. Returns true if the weapon fired successfully. */
+	UFUNCTION(BlueprintCallable, Category = "Weapon")
+	bool FireWeapon();
 
-    /** Fire the weapon. Can be bound to input or AI. */
-    UFUNCTION(BlueprintCallable, Category = "Weapon")
-    void FireWeapon();
+	/** Set the weapon's cooldown in seconds. */
+	UFUNCTION(BlueprintCallable, Category = "Weapon")
+	void SetCooldown(float NewCooldown);
 
-    /** Set the weapon configuration at runtime. */
-    UFUNCTION(BlueprintCallable, Category = "Weapon")
-    void SetWeaponConfig(const FWeaponConfig& NewConfig);
+	/** Set the projectile class to spawn. */
+	UFUNCTION(BlueprintCallable, Category = "Weapon")
+	void SetProjectileClass(TSubclassOf<AActor> NewProjectileClass);
+
+	/** Set the damage value applied by the projectile. */
+	UFUNCTION(BlueprintCallable, Category = "Weapon")
+	void SetDamage(float NewDamage);
+
+	/** Set the maximum range of the laser ray‑cast. */
+	UFUNCTION(BlueprintCallable, Category = "Weapon")
+	void SetRange(float NewRange);
+
+	/** Set the socket name on the owning actor that represents the muzzle. */
+	UFUNCTION(BlueprintCallable, Category = "Weapon")
+	void SetMuzzleSocketName(FName NewSocketName);
 
 protected:
-    /** Perform a raycast from the owner forward. Returns true if hit. */
-    bool PerformRaycast(FHitResult& OutHit);
+	/** Called when the game starts */
+	virtual void BeginPlay() override;
 
-    /** Spawn a projectile actor at the specified location and rotation. */
-    void SpawnProjectile(const FVector& SpawnLocation, const FRotator
+private:
+	/** Performs a line‑trace from the muzzle forward. */
+	bool PerformRaycast(FHitResult& OutHit);
+
+	/** Spawns a projectile at the muzzle location. */
+	void SpawnProjectile(const FVector& SpawnLocation, const FRotator& SpawnRotation);
+
+	/** Called when the cooldown timer expires. */
+	void ResetCooldown();
+
+	/** Whether the weapon is currently on cooldown. */
+	bool bCanFire = true;
+
+	/** Cool‑down duration in seconds. */
+	UPROPERTY(EditAnywhere, Category = "Weapon")
+	float CooldownDuration = 0.5f;
+
+	/** Damage dealt by the projectile. */
+	UPROPERTY(EditAnywhere, Category = "Weapon")
+	float Damage = 25.f;
+
+	/** Maximum range of the laser ray‑cast. */
+	UPROPERTY(EditAnywhere, Category = "Weapon")
+	float Range = 10000.f;
+
+	/** Projectile class to spawn (optional). */
+	UPROPERTY(EditAnywhere, Category = "Weapon")
+	TSubclassOf<AActor> ProjectileClass;
+
+	/** Socket name on the owning actor that represents the muzzle. */
+	UPROPERTY(EditAnywhere, Category = "Weapon")
+	FName MuzzleSocketName = "Muzzle";
+
+	/** Timer handle used for cooldown. */
+	FTimerHandle CooldownTimerHandle;
+};
