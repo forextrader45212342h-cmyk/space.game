@@ -1,186 +1,136 @@
 // OrbitVehicleController.cpp
-// 3‑D pitch / yaw / roll physics, gravity, resistance and acceleration
-// ---------------------------------------------------------------------------
+// 3‑D pitch / yaw / roll controller with gravity, drag and acceleration
+// -----------------------------------------------------------------
 
 #include "OrbitVehicleController.h"
-#include "OrbitVehicle.h"
-#include "GameFramework/Actor.h"
-#include "GameFramework/PlayerController.h"
+#include "OrbitPhysicsSimulation.h"
+#include "OrbitRenderCore.h"
+
+#include "GameFramework/SpringArmComponent.h"
+#include "Camera/CameraComponent.h"
+#include "Components/StaticMeshComponent.h"
+#include "Components/InputComponent.h"
 #include "Engine/World.h"
 #include "DrawDebugHelpers.h"
 
-namespace Orbit
-{
-/* -----------------------------------------------------------------------
- *  Helper constants
- * ----------------------------------------------------------------------- */
-constexpr float MaxPitchAngle   = 45.f;   // degrees
-constexpr float MaxYawAngle     = 360.f;  // degrees
-constexpr float MaxRollAngle    = 30.f;   // degrees
+#define DRAG_COEFFICIENT 0.1f   // Simple linear drag
+#define MAX_THRUST 5000.0f      // Max forward force
+#define MAX_TORQUE 2000.0f      // Max torque for pitch/yaw/roll
 
-constexpr float GravityStrength = 980.f;  // cm/s² (UE default)
-constexpr float DragCoefficient = 0.1f;   // arbitrary drag
-constexpr float AccelForce      = 5000.f; // force applied when accelerating
-
-/* -----------------------------------------------------------------------
- *  Constructor / Destructor
- * ----------------------------------------------------------------------- */
-OrbitVehicleController::OrbitVehicleController()
+// ---------------------------------------------------------------------
+// Constructor
+// ---------------------------------------------------------------------
+AOrbitVehicleController::AOrbitVehicleController()
 {
-    PrimaryComponentTick.bCanEverTick = true;
-    PrimaryComponentTick.bStartWithTickEnabled = true;
+    PrimaryActorTick.bCanEverTick = true;
+
+    // Root component
+    RootComponent = CreateDefaultSubobject<USceneComponent>(TEXT("Root"));
+
+    // Vehicle body
+    Body = CreateDefaultSubobject<UStaticMeshComponent>(TEXT("Body"));
+    Body->SetupAttachment(RootComponent);
+    Body->SetSimulatePhysics(true);
+    Body->SetEnableGravity(true);
+    Body->SetMassOverrideInKg(NAME_None, 1500.0f); // Example mass
+
+    // Camera
+    SpringArm = CreateDefaultSubobject<USpringArmComponent>(TEXT("SpringArm"));
+    SpringArm->SetupAttachment(Body);
+    SpringArm->TargetArmLength = 300.0f;
+    SpringArm->bEnableCameraLag = true;
+    SpringArm->CameraLagSpeed = 3.0f;
+
+    Camera = CreateDefaultSubobject<UCameraComponent>(TEXT("Camera"));
+    Camera->SetupAttachment(SpringArm, USpringArmComponent::SocketName);
 }
 
-OrbitVehicleController::~OrbitVehicleController()
+// ---------------------------------------------------------------------
+// Input binding
+// ---------------------------------------------------------------------
+void AOrbitVehicleController::SetupPlayerInputComponent(UInputComponent* PlayerInputComponent)
 {
+    Super::SetupPlayerInputComponent(PlayerInputComponent);
+
+    PlayerInputComponent->BindAxis("MoveForward", this, &AOrbitVehicleController::MoveForward);
+    PlayerInputComponent->BindAxis("MoveRight", this, &AOrbitVehicleController::MoveRight);
+    PlayerInputComponent->BindAxis("Turn", this, &AOrbitVehicleController::Turn);
+    PlayerInputComponent->BindAxis("LookUp", this, &AOrbitVehicleController::LookUp);
+    PlayerInputComponent->BindAxis("Roll", this, &AOrbitVehicleController::Roll);
 }
 
-/* -----------------------------------------------------------------------
- *  BeginPlay
- * ----------------------------------------------------------------------- */
-void OrbitVehicleController::BeginPlay()
+// ---------------------------------------------------------------------
+// Tick – apply physics each frame
+// ---------------------------------------------------------------------
+void AOrbitVehicleController::Tick(float DeltaTime)
 {
-    Super::BeginPlay();
+    Super::Tick(DeltaTime);
 
-    // Find the owning vehicle
-    Vehicle = Cast<AOrbitVehicle>(GetOwner());
-    if (!Vehicle)
-    {
-        UE_LOG(LogTemp, Error, TEXT("OrbitVehicleController must be attached to an AOrbitVehicle"));
-        return;
-    }
+    // Apply drag (gravity resistance)
+    FVector Velocity = Body->GetPhysicsLinearVelocity();
+    FVector DragForce = -Velocity.GetSafeNormal() * DRAG_COEFFICIENT * Velocity.SizeSquared();
+    Body->AddForce(DragForce, NAME_None, true);
 
-    // Cache the physics component
-    PhysicsComp = Vehicle->GetRootComponent();
-    if (!PhysicsComp)
-    {
-        UE_LOG(LogTemp, Error, TEXT("OrbitVehicleController: No root component found"));
-    }
+    // Optional: debug draw velocity
+    // DrawDebugLine(GetWorld(), GetActorLocation(), GetActorLocation() + Velocity * 0.1f, FColor::Green, false, -1, 0, 2);
 }
 
-/* -----------------------------------------------------------------------
- *  TickComponent
- * ----------------------------------------------------------------------- */
-void OrbitVehicleController::TickComponent(
-    float DeltaTime,
-    ELevelTick TickType,
-    FActorComponentTickFunction* ThisTickFunction)
+// ---------------------------------------------------------------------
+// Movement input handlers
+// ---------------------------------------------------------------------
+void AOrbitVehicleController::MoveForward(float Value)
 {
-    Super::TickComponent(DeltaTime, TickType, ThisTickFunction);
+    if (FMath::IsNearlyZero(Value)) return;
 
-    if (!Vehicle || !PhysicsComp) return;
-
-    // 1. Handle input
-    HandleInput(DeltaTime);
-
-    // 2. Apply physics forces
-    ApplyPhysics(DeltaTime);
+    // Forward thrust in local X direction
+    FVector Force = Body->GetForwardVector() * Value * MAX_THRUST;
+    Body->AddForce(Force, NAME_None, true);
 }
 
-/* -----------------------------------------------------------------------
- *  HandleInput
- * ----------------------------------------------------------------------- */
-void OrbitVehicleController::HandleInput(float DeltaTime)
+void AOrbitVehicleController::MoveRight(float Value)
 {
-    // Get the player controller that owns this vehicle
-    APlayerController* PC = Cast<APlayerController>(Vehicle->GetController());
-    if (!PC) return;
+    if (FMath::IsNearlyZero(Value)) return;
 
-    // Pitch (look up/down)
-    float PitchInput = 0.f;
-    PC->GetInputAxisValue(TEXT("Pitch"), PitchInput);
-
-    // Yaw (turn left/right)
-    float YawInput = 0.f;
-    PC->GetInputAxisValue(TEXT("Yaw"), YawInput);
-
-    // Roll (tilt left/right)
-    float RollInput = 0.f;
-    PC->GetInputAxisValue(TEXT("Roll"), RollInput);
-
-    // Acceleration (forward/backward)
-    float ThrottleInput = 0.f;
-    PC->GetInputAxisValue(TEXT("Throttle"), ThrottleInput);
-
-    // Store for physics step
-    DesiredPitchDelta = PitchInput * MaxPitchAngle * DeltaTime;
-    DesiredYawDelta   = YawInput   * MaxYawAngle   * DeltaTime;
-    DesiredRollDelta  = RollInput  * MaxRollAngle  * DeltaTime;
-    DesiredThrottle   = ThrottleInput;
+    // Lateral thrust in local Y direction
+    FVector Force = Body->GetRightVector() * Value * MAX_THRUST;
+    Body->AddForce(Force, NAME_None, true);
 }
 
-/* -----------------------------------------------------------------------
- *  ApplyPhysics
- * ----------------------------------------------------------------------- */
-void OrbitVehicleController::ApplyPhysics(float DeltaTime)
+// ---------------------------------------------------------------------
+// Rotation input handlers – pitch, yaw, roll
+// ---------------------------------------------------------------------
+void AOrbitVehicleController::Turn(float Value)
 {
-    // 1. Orientation update (pitch/yaw/roll)
-    FRotator CurrentRot = Vehicle->GetActorRotation();
+    if (FMath::IsNearlyZero(Value)) return;
 
-    // Clamp the pitch/roll to avoid gimbal lock
-    float NewPitch = FMath::Clamp(
-        CurrentRot.Pitch + DesiredPitchDelta,
-        -MaxPitchAngle,
-        MaxPitchAngle);
-
-    float NewYaw   = FMath::Clamp(
-        CurrentRot.Yaw   + DesiredYawDelta,
-        -MaxYawAngle,
-        MaxYawAngle);
-
-    float NewRoll  = FMath::Clamp(
-        CurrentRot.Roll  + DesiredRollDelta,
-        -MaxRollAngle,
-        MaxRollAngle);
-
-    Vehicle->SetActorRotation(FRotator(NewPitch, NewYaw, NewRoll));
-
-    // 2. Acceleration force
-    FVector Forward = Vehicle->GetActorForwardVector();
-    FVector AccelForceVec = Forward * DesiredThrottle * AccelForce;
-
-    // 3. Gravity (always downwards in world space)
-    FVector GravityForce = FVector(0.f, 0.f, -GravityStrength) * Vehicle->GetMass();
-
-    // 4. Drag / resistance (opposes velocity)
-    FVector CurrentVelocity = PhysicsComp->GetPhysicsLinearVelocity();
-    FVector DragForce = -DragCoefficient * CurrentVelocity;
-
-    // 5. Sum forces
-    FVector TotalForce = AccelForceVec + GravityForce + DragForce;
-
-    // 6. Apply to physics component
-    PhysicsComp->AddForce(TotalForce);
-
-    // 7. Optional: debug visualization
-    #if WITH_EDITOR
-    DrawDebugLine(
-        GetWorld(),
-        Vehicle->GetActorLocation(),
-        Vehicle->GetActorLocation() + Forward * 200.f,
-        FColor::Green,
-        false,
-        -1.f,
-        0,
-        2.f);
-    #endif
+    // Yaw – torque around local Z axis
+    FVector Torque = Body->GetUpVector() * Value * MAX_TORQUE;
+    Body->AddTorqueInRadians(Torque, NAME_None, true);
 }
 
-/* -----------------------------------------------------------------------
- *  Public API: SetThrottle
- * ----------------------------------------------------------------------- */
-void OrbitVehicleController::SetThrottle(float Value)
+void AOrbitVehicleController::LookUp(float Value)
 {
-    DesiredThrottle = FMath::Clamp(Value, -1.f, 1.f);
+    if (FMath::IsNearlyZero(Value)) return;
+
+    // Pitch – torque around local Y axis
+    FVector Torque = Body->GetRightVector() * Value * MAX_TORQUE;
+    Body->AddTorqueInRadians(Torque, NAME_None, true);
 }
 
-/* -----------------------------------------------------------------------
- *  Public API: SetPitchYawRoll
- * ----------------------------------------------------------------------- */
-void OrbitVehicleController::SetPitchYawRoll(float Pitch, float Yaw, float Roll)
+void AOrbitVehicleController::Roll(float Value)
 {
-    DesiredPitchDelta = Pitch * MaxPitchAngle;
-    DesiredYawDelta   = Yaw   * MaxYawAngle;
-    DesiredRollDelta  = Roll  * MaxRollAngle;
+    if (FMath::IsNearlyZero(Value)) return;
+
+    // Roll – torque around local X axis
+    FVector Torque = Body->GetForwardVector() * Value * MAX_TORQUE;
+    Body->AddTorqueInRadians(Torque, NAME_None, true);
 }
-} // namespace Orbit
+
+// ---------------------------------------------------------------------
+// Optional: expose physics simulation to the engine
+// ---------------------------------------------------------------------
+void AOrbitVehicleController::GetPhysicsState(FVector& OutVelocity, FVector& OutAngularVelocity) const
+{
+    OutVelocity = Body->GetPhysicsLinearVelocity();
+    OutAngularVelocity = Body->GetPhysicsAngularVelocityInRadians();
+}
