@@ -1,142 +1,83 @@
 // OrbitVehicleController.h
-// ---------------
-// UE5 C++ header for a futuristic spaceship controller.
-// Handles thruster vectors, speed, and physics integration.
-//
-//  Author: Principal UE5 C++ Engineer
-//  Date:   2026-10-04
-//  ------------------------------------------------------------
-
 #pragma once
 
 #include "CoreMinimal.h"
-#include "GameFramework/Pawn.h"
+#include "Components/ActorComponent.h"
 #include "OrbitVehicleController.generated.h"
 
 /**
- *  A spaceship pawn that uses a set of thrusters to control
- *  its velocity in 3D space.  Each thruster is defined by a
- *  direction vector (in local space) and a maximum thrust
- *  magnitude.  The controller blends the active thrusters
- *  to produce a net force that is applied to the physics
- *  body each frame.
+ *  UOrbitVehicleController
+ *  -----------------------
+ *  A lightweight component that drives a futuristic spaceship using
+ *  thruster vectors.  It exposes a simple API for applying thrust,
+ *  clamping speed, and querying the current velocity.  All values
+ *  are exposed to the editor and Blueprint for rapid iteration.
  */
-UCLASS()
-class ORBIT_API AOrbitVehicleController : public APawn
+UCLASS( ClassGroup=(Custom), meta=(BlueprintSpawnableComponent) )
+class ORBIT_API UOrbitVehicleController : public UActorComponent
 {
-    GENERATED_BODY()
+	GENERATED_BODY()
 
 public:
-    // ------------------------------------------------------------------
-    // Construction & Lifecycle
-    // ------------------------------------------------------------------
-    AOrbitVehicleController();
+	/** Default constructor */
+	UOrbitVehicleController();
 
-    /** Called every frame */
-    virtual void Tick(float DeltaTime) override;
+	/** Called when the game starts */
+	virtual void BeginPlay() override;
 
-    /** Setup player input bindings */
-    virtual void SetupPlayerInputComponent(class UInputComponent* PlayerInputComponent) override;
+	/** Called every frame */
+	virtual void TickComponent(
+		float DeltaTime,
+		ELevelTick TickType,
+		FActorComponentTickFunction* ThisTickFunction) override;
 
-    /** Called when the pawn is spawned or the level starts */
-    virtual void BeginPlay() override;
+	/** Apply a thrust impulse in local space.
+	 *
+	 *  @param Direction  Local direction of the thrust (e.g. +X for forward).
+	 *  @param Magnitude  Thrust magnitude in units per second squared.
+	 */
+	UFUNCTION(BlueprintCallable, Category="Orbit|Thrusters")
+	void ApplyThrust(const FVector& Direction, float Magnitude);
 
-    /** Called when the pawn is destroyed */
-    virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
+	/** Set the maximum speed the vehicle can reach. */
+	UFUNCTION(BlueprintCallable, Category="Orbit|Thrusters")
+	void SetMaxSpeed(float NewMaxSpeed);
 
-    // ------------------------------------------------------------------
-    // Thruster Management
-    // ------------------------------------------------------------------
-    /** Add a new thruster to the vehicle */
-    UFUNCTION(BlueprintCallable, Category = "Thrusters")
-    void AddThruster(const FVector& LocalDirection, float MaxThrust);
+	/** Get the current speed (magnitude of velocity). */
+	UFUNCTION(BlueprintPure, Category="Orbit|Thrusters")
+	float GetCurrentSpeed() const;
 
-    /** Remove all thrusters */
-    UFUNCTION(BlueprintCallable, Category = "Thrusters")
-    void ClearThrusters();
+	/** Get the full velocity vector in world space. */
+	UFUNCTION(BlueprintPure, Category="Orbit|Thrusters")
+	FVector GetVelocity() const;
 
-    /** Get the number of active thrusters */
-    UFUNCTION(BlueprintPure, Category = "Thrusters")
-    int32 GetThrusterCount() const { return Thrusters.Num(); }
+	/** Set the orientation of the thruster relative to the owning actor. */
+	UFUNCTION(BlueprintCallable, Category="Orbit|Thrusters")
+	void SetThrusterOrientation(const FRotator& NewOrientation);
 
-    /** Get the local direction of a thruster by index */
-    UFUNCTION(BlueprintPure, Category = "Thrusters")
-    FVector GetThrusterDirection(int32 Index) const;
+	/** Get the current thruster orientation. */
+	UFUNCTION(BlueprintPure, Category="Orbit|Thrusters")
+	FRotator GetThrusterOrientation() const;
 
-    /** Get the maximum thrust of a thruster by index */
-    UFUNCTION(BlueprintPure, Category = "Thrusters")
-    float GetThrusterMaxThrust(int32 Index) const;
+protected:
+	/** Maximum speed (units per second). */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Orbit|Thrusters")
+	float MaxSpeed = 2000.f;
 
-    // ------------------------------------------------------------------
-    // Speed Control
-    // ------------------------------------------------------------------
-    /** Current speed magnitude (m/s) */
-    UPROPERTY(BlueprintReadOnly, Category = "Movement")
-    float CurrentSpeed = 0.f;
+	/** Acceleration when thrust is applied (units per second squared). */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Orbit|Thrusters")
+	float Acceleration = 500.f;
 
-    /** Maximum allowed speed (m/s) */
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Movement")
-    float MaxSpeed = 3000.f;
+	/** Deceleration applied when no thrust is active (units per second squared). */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Orbit|Thrusters")
+	float Deceleration = 300.f;
 
-    /** Acceleration rate (m/s²) */
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Movement")
-    float Acceleration = 500.f;
+	/** Current velocity in world space. */
+	FVector CurrentVelocity = FVector::ZeroVector;
 
-    /** Deceleration rate (m/s²) */
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Movement")
-    float Deceleration = 300.f;
+	/** Thruster orientation relative to the owning actor. */
+	FRotator ThrusterOrientation = FRotator::ZeroRotator;
 
-    /** Current throttle value (0.0 – 1.0) */
-    UPROPERTY(BlueprintReadOnly, Category = "Movement")
-    float Throttle = 0.f;
-
-    /** Current yaw input (-1.0 – 1.0) */
-    UPROPERTY(BlueprintReadOnly, Category = "Movement")
-    float YawInput = 0.f;
-
-    /** Current pitch input (-1.0 – 1.0) */
-    UPROPERTY(BlueprintReadOnly, Category = "Movement")
-    float PitchInput = 0.f;
-
-    /** Current roll input (-1.0 – 1.0) */
-    UPROPERTY(BlueprintReadOnly, Category = "Movement")
-    float RollInput = 0.f;
-
-    // ------------------------------------------------------------------
-    // Components
-    // ------------------------------------------------------------------
-    /** Root component for the pawn */
-    UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Components")
-    USceneComponent* Root;
-
-    /** Visual representation of the spaceship */
-    UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Components")
-    UStaticMeshComponent* Mesh;
-
-    /** Camera for the player */
-    UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Components")
-    UCameraComponent* Camera;
-
-private:
-    /** Internal struct representing a thruster */
-    struct FThruster
-    {
-        FVector LocalDirection;   // Normalized local-space direction
-        float MaxThrust;          // Maximum force (N) this thruster can produce
-    };
-
-    /** All thrusters attached to this vehicle */
-    TArray<FThruster> Thrusters;
-
-    /** Helper to apply physics forces each tick */
-    void ApplyThrusterForces(float DeltaTime);
-
-    /** Helper to update speed based on throttle */
-    void UpdateSpeed(float DeltaTime);
-
-    /** Helper to rotate the vehicle based on input */
-    void ApplyRotation(float DeltaTime);
-
-    /** Cached physics handle for the mesh */
-    UPrimitiveComponent* PhysicsComponent = nullptr;
+	/** Clamp the velocity to the configured MaxSpeed. */
+	void ClampSpeed();
 };
