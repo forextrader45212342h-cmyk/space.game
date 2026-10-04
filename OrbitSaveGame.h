@@ -6,61 +6,51 @@
 #include "OrbitSaveGame.generated.h"
 
 /**
- * Simple coordinate representation used for saving visited locations.
+ *  Stores persistent game data such as fuel, score, ship coordinates and unlocked ships.
+ *  This class is intended to be used with the UE5 SaveGame system.
  */
-USTRUCT(BlueprintType)
-struct FOrbitCoordinate
-{
-    GENERATED_BODY()
-
-    /** World location of the coordinate. */
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Orbit")
-    FVector Location = FVector::ZeroVector;
-
-    /** Rotation at the coordinate (optional). */
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Orbit")
-    FRotator Rotation = FRotator::ZeroRotator;
-
-    FOrbitCoordinate() = default;
-};
-
-/**
- * SaveGame class that stores fuel, score, visited coordinates and unlocked ships.
- */
-UCLASS(BlueprintType)
+UCLASS(BlueprintType, Category = "Orbit|Save")
 class ORBIT_API UOrbitSaveGame : public USaveGame
 {
     GENERATED_BODY()
 
 public:
-    /** Default constructor. */
-    UOrbitSaveGame();
+    /** Default constructor */
+    UOrbitSaveGame()
+        : Fuel(0)
+        , Score(0)
+    {}
 
-    /** Current fuel amount. */
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Gameplay")
-    float Fuel = 0.f;
+    /** Current fuel level */
+    UPROPERTY(BlueprintReadWrite, Category = "Orbit|Save")
+    int32 Fuel;
 
-    /** Current score. */
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Gameplay")
-    int32 Score = 0;
+    /** Current score */
+    UPROPERTY(BlueprintReadWrite, Category = "Orbit|Save")
+    int32 Score;
 
-    /** List of coordinates the player has visited. */
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Gameplay")
-    TArray<FOrbitCoordinate> Coordinates;
+    /** Positions of all ships that have been spawned or visited */
+    UPROPERTY(BlueprintReadWrite, Category = "Orbit|Save")
+    TArray<FVector> ShipCoordinates;
 
-    /** List of ship IDs that have been unlocked. */
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Gameplay")
-    TArray<int32> UnlockedShipIDs;
+    /** Names of ships that have been unlocked by the player */
+    UPROPERTY(BlueprintReadWrite, Category = "Orbit|Save")
+    TArray<FName> UnlockedShips;
 
-    /** Add a new coordinate to the list. */
-    UFUNCTION(BlueprintCallable, Category = "Gameplay")
-    void AddCoordinate(const FVector& InLocation, const FRotator& InRotation = FRotator::ZeroRotator);
+    /** Helper to add a new ship coordinate */
+    UFUNCTION(BlueprintCallable, Category = "Orbit|Save")
+    void AddShipCoordinate(const FVector& NewCoord)
+    {
+        ShipCoordinates.Add(NewCoord);
+    }
 
-    /** Unlock a ship by its ID. */
-    UFUNCTION(BlueprintCallable, Category = "Gameplay")
-    void UnlockShip(int32 ShipID);
-
-    /** Check if a ship is already unlocked. */
-    UFUNCTION(BlueprintCallable, Category = "Gameplay")
-    bool IsShipUnlocked(int32 ShipID) const;
+    /** Helper to unlock a new ship */
+    UFUNCTION(BlueprintCallable, Category = "Orbit|Save")
+    void UnlockShip(const FName& ShipName)
+    {
+        if (!UnlockedShips.Contains(ShipName))
+        {
+            UnlockedShips.Add(ShipName);
+        }
+    }
 };
