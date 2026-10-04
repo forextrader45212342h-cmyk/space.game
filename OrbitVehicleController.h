@@ -1,4 +1,7 @@
 // OrbitVehicleController.h
+// UE5 C++ header for a futuristic spaceship flight controller.
+// Handles thruster vectors, speed, and basic movement logic.
+
 #pragma once
 
 #include "CoreMinimal.h"
@@ -6,73 +9,93 @@
 #include "OrbitVehicleController.generated.h"
 
 /**
- *  A futuristic spaceship controller that manages thruster vectors and speed.
- *  The controller exposes thruster force, maximum speed, and current velocity
- *  to the editor and allows runtime manipulation via input or AI.
+ * A simple spaceship pawn that uses thruster vectors to control movement.
+ * The class is fully Blueprint‑editable and supports network replication.
  */
-UCLASS()
-class ORBIT_API AOrbitVehicleController : public APawn
+UCLASS(Blueprintable, ClassGroup = (Custom), meta = (BlueprintSpawnableComponent))
+class YOURGAME_API AOrbitVehicleController : public APawn
 {
 	GENERATED_BODY()
 
 public:
+	/** Constructor */
 	AOrbitVehicleController();
 
 	/** Called every frame */
 	virtual void Tick(float DeltaTime) override;
 
-	/** Called to bind functionality to input */
+	/** Setup player input bindings */
 	virtual void SetupPlayerInputComponent(class UInputComponent* PlayerInputComponent) override;
 
-	/** Apply a thrust impulse in the given direction */
-	UFUNCTION(BlueprintCallable, Category = "Thruster")
-	void ApplyThrust(const FVector& Direction, float Magnitude);
+	/** Replication */
+	virtual void GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const override;
 
-	/** Set the current thruster direction (used for AI or scripted movement) */
-	UFUNCTION(BlueprintCallable, Category = "Thruster")
-	void SetThrusterDirection(const FVector& NewDirection);
+	/** Current speed of the ship (m/s) */
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Movement")
+	float CurrentSpeed;
 
-	/** Get the current velocity of the vehicle */
-	UFUNCTION(BlueprintPure, Category = "Thruster")
-	FVector GetCurrentVelocity() const { return CurrentVelocity; }
+	/** Maximum speed the ship can reach (m/s) */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Movement")
+	float MaxSpeed;
 
-	/** Get the current speed (magnitude of velocity) */
-	UFUNCTION(BlueprintPure, Category = "Thruster")
-	float GetCurrentSpeed() const { return CurrentVelocity.Size(); }
+	/** Acceleration rate (m/s²) */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Movement")
+	float Acceleration;
+
+	/** Deceleration rate (m/s²) */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Movement")
+	float Deceleration;
+
+	/** Thruster vector for forward/backward motion */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Thrusters")
+	FVector ForwardThruster;
+
+	/** Thruster vector for lateral (right/left) motion */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Thrusters")
+	FVector LateralThruster;
+
+	/** Thruster vector for vertical (up/down) motion */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Thrusters")
+	FVector VerticalThruster;
+
+	/** Apply thrust in the given direction (normalized) */
+	UFUNCTION(BlueprintCallable, Category = "Thrusters")
+	void ApplyThruster(const FVector& Direction, float ThrustMagnitude);
+
+	/** Stop all thrusters (used when input is released) */
+	UFUNCTION(BlueprintCallable, Category = "Thrusters")
+	void StopAllThrusters();
 
 protected:
-	/** Called when the game starts or when spawned */
-	virtual void BeginPlay() override;
+	/** Root component */
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Components")
+	USceneComponent* Root;
 
-private:
-	/** Static mesh representing the spaceship */
-	UPROPERTY(VisibleAnywhere, Category = "Components")
+	/** Mesh representing the spaceship */
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Components")
 	UStaticMeshComponent* ShipMesh;
 
-	/** Current velocity of the spaceship */
+	/** Camera boom (spring arm) */
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Components")
+	USpringArmComponent* CameraBoom;
+
+	/** Follow camera */
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Components")
+	UCameraComponent* FollowCamera;
+
+	/** Current velocity vector */
 	FVector CurrentVelocity;
 
-	/** Current thruster direction (normalized) */
-	FVector ThrusterDirection;
-
-	/** Force applied per second when thrusters are active */
-	UPROPERTY(EditAnywhere, Category = "Thruster")
-	float ThrusterForce = 5000.0f;
-
-	/** Maximum speed the ship can reach */
-	UPROPERTY(EditAnywhere, Category = "Thruster")
-	float MaxSpeed = 3000.0f;
-
-	/** Current throttle value (0.0 to 1.0) */
-	float Throttle = 0.0f;
-
-	/** Helper to clamp velocity to MaxSpeed */
-	void ClampVelocity();
+	/** Input flags */
+	bool bThrustForward;
+	bool bThrustBackward;
+	bool bThrustRight;
+	bool bThrustLeft;
+	bool bThrustUp;
+	bool bThrustDown;
 
 	/** Input handlers */
 	void MoveForward(float Value);
 	void MoveRight(float Value);
 	void MoveUp(float Value);
-	void IncreaseThrottle();
-	void DecreaseThrottle();
 };
