@@ -1,99 +1,83 @@
 // OrbitVehicleController.h
-// ---------------
-// UE5 C++ header for a futuristic spaceship controller.
-// Handles thruster vectors, speed, and basic physics integration.
-// -----------------------------------------------------------------
-
 #pragma once
 
 #include "CoreMinimal.h"
-#include "GameFramework/Pawn.h"
+#include "Components/ActorComponent.h"
 #include "OrbitVehicleController.generated.h"
 
 /**
- *  OrbitVehicleController
+ *  UOrbitVehicleController
+ *  -----------------------
+ *  A component that drives a futuristic spaceship using thruster vectors.
+ *  It exposes a simple API for applying thrust in the local forward, right
+ *  and up directions, and automatically integrates the resulting velocity
+ *  and orientation each frame.
  *
- *  A lightweight spaceship controller that exposes thruster vectors
- *  (forward, right, up) and a speed multiplier.  The controller
- *  applies forces to the owning pawn's root component each tick.
- *
- *  The class is intentionally header‑only for quick prototyping.
- *  In a production build you would move the implementation to a .cpp
- *  file and expose only the interface.
+ *  The component is intentionally lightweight – it does not depend on
+ *  any external physics engine, but instead uses the built‑in
+ *  FVector/FRotator math to update the owning actor.
  */
-UCLASS()
-class ORBIT_API AOrbitVehicleController : public APawn
+UCLASS(ClassGroup = (Custom), meta = (BlueprintSpawnableComponent))
+class ORBIT_API UOrbitVehicleController : public UActorComponent
 {
-    GENERATED_BODY()
+	GENERATED_BODY()
 
 public:
-    // -----------------------------------------------------------------
-    // Construction / Lifecycle
-    // -----------------------------------------------------------------
-    AOrbitVehicleController();
+	/** Default constructor */
+	UOrbitVehicleController();
 
-    /** Called every frame.  Applies thruster forces. */
-    virtual void Tick(float DeltaTime) override;
+	/** Called every frame */
+	virtual void TickComponent(
+		float DeltaTime,
+		ELevelTick TickType,
+		FActorComponentTickFunction* ThisTickFunction) override;
 
-    /** Called when the game starts or when spawned. */
-    virtual void BeginPlay() override;
+	/** Apply a thrust vector in local space (normalized). */
+	UFUNCTION(BlueprintCallable, Category = "Orbit|Thrusters")
+	void ApplyThrust(const FVector& LocalDirection, float Magnitude);
 
-    /** Called when the pawn is destroyed. */
-    virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
+	/** Set the maximum speed the vehicle can reach. */
+	UFUNCTION(BlueprintCallable, Category = "Orbit|Thrusters")
+	void SetMaxSpeed(float NewMaxSpeed);
 
-    // -----------------------------------------------------------------
-    // Thruster API
-    // -----------------------------------------------------------------
-    /** Sets the forward thruster vector (local space). */
-    UFUNCTION(BlueprintCallable, Category = "Thrusters")
-    void SetForwardThruster(const FVector& InVector);
+	/** Get the current speed magnitude. */
+	UFUNCTION(BlueprintPure, Category = "Orbit|Thrusters")
+	float GetCurrentSpeed() const;
 
-    /** Sets the right thruster vector (local space). */
-    UFUNCTION(BlueprintCallable, Category = "Thrusters")
-    void SetRightThruster(const FVector& InVector);
+	/** Get the current velocity vector in world space. */
+	UFUNCTION(BlueprintPure, Category = "Orbit|Thrusters")
+	FVector GetVelocity() const;
 
-    /** Sets the up thruster vector (local space). */
-    UFUNCTION(BlueprintCallable, Category = "Thrusters")
-    void SetUpThruster(const FVector& InVector);
+	/** Get the current orientation of the vehicle. */
+	UFUNCTION(BlueprintPure, Category = "Orbit|Thrusters")
+	FRotator GetOrientation() const;
 
-    /** Sets the global speed multiplier (0 = idle, 1 = full thrust). */
-    UFUNCTION(BlueprintCallable, Category = "Thrusters")
-    void SetSpeedMultiplier(float InMultiplier);
-
-    /** Returns the current speed multiplier. */
-    UFUNCTION(BlueprintPure, Category = "Thrusters")
-    float GetSpeedMultiplier() const { return SpeedMultiplier; }
-
-    // -----------------------------------------------------------------
-    // Input helpers (optional)
-    // -----------------------------------------------------------------
-    /** Bind input actions to thruster controls. */
-    void SetupPlayerInputComponent(class UInputComponent* PlayerInputComponent) override;
+protected:
+	/** Called when the game starts */
+	virtual void BeginPlay() override;
 
 private:
-    /** Root component that receives physics forces. */
-    UPROPERTY(VisibleAnywhere, Category = "Components")
-    UStaticMeshComponent* RootMesh;
+	/** Current velocity in world space */
+	FVector Velocity = FVector::ZeroVector;
 
-    /** Forward thruster vector (local space). */
-    UPROPERTY(EditAnywhere, Category = "Thrusters")
-    FVector ForwardThruster = FVector::ForwardVector;
+	/** Current orientation (world space) */
+	FRotator Orientation = FRotator::ZeroRotator;
 
-    /** Right thruster vector (local space). */
-    UPROPERTY(EditAnywhere, Category = "Thrusters")
-    FVector RightThruster = FVector::RightVector;
+	/** Maximum speed (units per second) */
+	UPROPERTY(EditAnywhere, Category = "Orbit|Thrusters")
+	float MaxSpeed = 3000.f;
 
-    /** Up thruster vector (local space). */
-    UPROPERTY(EditAnywhere, Category = "Thrusters")
-    FVector UpThruster = FVector::UpVector;
+	/** Acceleration per second when full thrust is applied */
+	UPROPERTY(EditAnywhere, Category = "Orbit|Thrusters")
+	float MaxAcceleration = 2000.f;
 
-    /** Global speed multiplier (0–1). */
-    UPROPERTY(EditAnywhere, Category = "Thrusters")
-    float SpeedMultiplier = 1.0f;
+	/** Drag coefficient (fraction of velocity lost per second) */
+	UPROPERTY(EditAnywhere, Category = "Orbit|Thrusters")
+	float DragCoefficient = 0.1f;
 
-    /** Cached world transform for efficient force application. */
-    FTransform CachedTransform;
+	/** Helper to clamp velocity to MaxSpeed */
+	void ClampVelocity();
 
-    /** Helper to apply a single thruster force. */
-    void ApplyThruster(const FVector& LocalVector, float DeltaTime);
+	/** Helper to apply drag */
+	void ApplyDrag(float DeltaTime);
 };
