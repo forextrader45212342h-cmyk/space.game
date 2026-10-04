@@ -6,105 +6,87 @@
 #include "OrbitVehicleController.generated.h"
 
 /**
- *  A single thruster definition.
- *  Direction is defined in local space of the owning actor.
- *  MaxForce is the maximum force (in Newtons) that this thruster can apply.
- *  bEnabled allows the thruster to be toggled on/off at runtime.
- */
-USTRUCT(BlueprintType)
-struct FThruster
-{
-	GENERATED_BODY()
-
-	/** Direction of thrust in local space (should be normalized). */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Thruster")
-	FVector Direction = FVector::ForwardVector;
-
-	/** Maximum force this thruster can produce (N). */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Thruster")
-	float MaxForce = 1000.f;
-
-	/** Whether this thruster is currently active. */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Thruster")
-	bool bEnabled = true;
-};
-
-/**
  *  OrbitVehicleController
- *  Handles spaceship flight using a set of thrusters.
- *  Supports forward/backward, lateral, vertical, and rotational thrust.
- *  Speed is clamped to MaxSpeed and updated each tick.
+ *  -----------------------
+ *  A UE5 component that manages a futuristic spaceship's flight system.
+ *  It handles multiple thruster vectors, acceleration, speed limits, and
+ *  provides a simple API for applying thrust in arbitrary directions.
+ *
+ *  The component is ticked every frame and updates the owning actor's
+ *  velocity accordingly.  It exposes properties that can be edited in
+ *  the editor or overridden in Blueprints.
  */
-UCLASS(ClassGroup = (Custom), meta = (BlueprintSpawnableComponent))
+UCLASS( ClassGroup=(Custom), meta=(BlueprintSpawnableComponent) )
 class ORBIT_API UOrbitVehicleController : public UActorComponent
 {
 	GENERATED_BODY()
 
 public:
+	/** Constructor */
 	UOrbitVehicleController();
 
-	/** Called every frame. */
+	/** Called every frame */
 	virtual void TickComponent(
 		float DeltaTime,
 		ELevelTick TickType,
 		FActorComponentTickFunction* ThisTickFunction) override;
 
-	/** Called when the game starts. */
-	virtual void BeginPlay() override;
+	/** Apply thrust in a given direction.  Amount is a scalar multiplier (0..1). */
+	UFUNCTION(BlueprintCallable, Category="Orbit|Thrusters")
+	void ApplyThrust(const FVector& Direction, float Amount = 1.0f);
 
-	/** Apply thrust to a specific thruster. Input is 0.0 .. 1.0. */
-	UFUNCTION(BlueprintCallable, Category = "Thruster")
-	void ApplyThruster(int32 ThrusterIndex, float Input);
-
-	/** Apply rotational thrust around local axes. */
-	UFUNCTION(BlueprintCallable, Category = "Thruster")
-	void ApplyRotationalThrust(const FVector& RotationInput, float DeltaTime);
-
-	/** Set the maximum speed of the vehicle. */
-	UFUNCTION(BlueprintCallable, Category = "Movement")
+	/** Set the maximum speed of the vehicle (units per second). */
+	UFUNCTION(BlueprintCallable, Category="Orbit|Movement")
 	void SetMaxSpeed(float NewMaxSpeed);
 
-	/** Get the current speed (magnitude of velocity). */
-	UFUNCTION(BlueprintCallable, Category = "Movement")
-	float GetSpeed() const { return CurrentVelocity.Size(); }
+	/** Get the current speed of the vehicle. */
+	UFUNCTION(BlueprintPure, Category="Orbit|Movement")
+	float GetCurrentSpeed() const { return CurrentSpeed; }
 
-	/** Get the current velocity vector in world space. */
-	UFUNCTION(BlueprintCallable, Category = "Movement")
-	FVector GetVelocity() const { return CurrentVelocity; }
-
-	/** Array of thrusters that drive the vehicle. */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Thrusters")
-	TArray<FThruster> Thrusters;
-
-	/** Maximum speed (m/s). */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Movement")
-	float MaxSpeed = 3000.f;
-
-	/** Acceleration rate (m/s^2). */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Movement")
-	float Acceleration = 500.f;
-
-	/** Deceleration rate when no thrust is applied (m/s^2). */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Movement")
-	float Deceleration = 200.f;
-
-	/** Whether to use the physics engine for movement. */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Movement")
-	bool bUsePhysics = true;
+	/** Called when the speed changes significantly (e.g. > 5% change). */
+	UPROPERTY(BlueprintAssignable, Category="Orbit|Events")
+	FOnSpeedChangedSignature OnSpeedChanged;
 
 protected:
-	/** Current velocity in world space. */
+	/** Called when the component is initialized */
+	virtual void BeginPlay() override;
+
+private:
+	/** Current velocity of the vehicle in world space */
 	FVector CurrentVelocity = FVector::ZeroVector;
 
-	/** Cached reference to the root physics component. */
-	UPrimitiveComponent* PhysicsComponent = nullptr;
+	/** Current speed magnitude (units per second) */
+	float CurrentSpeed = 0.0f;
 
-	/** Compute the net thrust vector from all active thrusters. */
-	FVector ComputeNetThrust() const;
+	/** Maximum allowed speed */
+	UPROPERTY(EditAnywhere, Category="Orbit|Movement")
+	float MaxSpeed = 3000.0f; // units/s
 
-	/** Apply the computed thrust to the physics component or directly to velocity. */
-	void ApplyThrust(const FVector& Thrust, float DeltaTime);
+	/** Acceleration per second when full thrust is applied */
+	UPROPERTY(EditAnywhere, Category="Orbit|Movement")
+	float Acceleration = 1500.0f; // units/s^2
 
-	/** Clamp the velocity to MaxSpeed. */
-	void ClampSpeed();
+	/** Deceleration when no thrust is applied (drag) */
+	UPROPERTY(EditAnywhere, Category="Orbit|Movement")
+	float Deceleration = 800.0f; // units/s^2
+
+	/** List of active thruster vectors relative to the actor */
+	UPROPERTY(EditAnywhere, Category="Orbit|Thrusters")
+	TArray<FVector> ThrusterVectors;
+
+	/** Helper to clamp speed and update CurrentVelocity */
+	void UpdateVelocity(float DeltaTime);
+
+	/** Helper to broadcast speed change if needed */
+	void BroadcastSpeedChange();
+
+	/** Threshold for broadcasting speed changes (percentage of MaxSpeed) */
+	UPROPERTY(EditDefaultsOnly, Category="Orbit|Events")
+	float SpeedChangeThreshold = 0.05f; // 5%
+
+	/** Last broadcasted speed for comparison */
+	float LastBroadcastedSpeed = 0.0f;
 };
+
+/** Delegate for speed change events */
+DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FOnSpeedChangedSignature, float, NewSpeed);
