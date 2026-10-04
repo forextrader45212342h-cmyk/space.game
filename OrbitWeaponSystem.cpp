@@ -1,129 +1,136 @@
 // OrbitWeaponSystem.cpp
-// Implements laser firing, line‑trace damage, and telemetry for the Orbit weapon system.
+// Implements laser firing, line‑trace damage, and telemetry
 
 #include "OrbitWeaponSystem.h"
 #include "Engine/World.h"
 #include "DrawDebugHelpers.h"
 #include "Kismet/GameplayStatics.h"
 #include "GameFramework/Actor.h"
-#include "Components/PrimitiveComponent.h"
+#include "Components/SceneComponent.h"
+#include "GameFramework/PlayerController.h"
+#include "Engine/Engine.h"
 
 namespace Orbit
 {
-    // ------------------------------------------------------------------
-    // UOrbitWeaponSystem
-    // ------------------------------------------------------------------
-
-    UOrbitWeaponSystem::UOrbitWeaponSystem()
+    // --------------------------------------------------------------------
+    // FireLaser
+    // --------------------------------------------------------------------
+    void OrbitWeaponSystem::FireLaser()
     {
-        // Default values
-        BaseDamage   = 25.f;
-        DamageType   = UDamageType::StaticClass();
-        ImpactEffect = nullptr;
-    }
-
-    // Fire a laser from Start to End.  Performs a line‑trace, applies damage,
-    // spawns an impact effect, and logs telemetry.
-    void UOrbitWeaponSystem::FireLaser(const FVector& Start, const FVector& End)
-    {
-        if (!GetWorld())
+        // Validate world and owner
+        if (!GetWorld() || !Owner)
         {
-            UE_LOG(LogTemp, Warning, TEXT("OrbitWeaponSystem::FireLaser - No world context"));
+            UE_LOG(LogTemp, Warning, TEXT("OrbitWeaponSystem::FireLaser - Invalid world or owner"));
             return;
         }
 
-        // Prepare trace parameters
-        FHitResult HitResult;
-        FCollisionQueryParams TraceParams(SCENE_QUERY_STAT(OrbitLaserTrace), true);
-        TraceParams.AddIgnoredActor(GetOwner());
-        TraceParams.bTraceComplex = true;
+        // Get muzzle location and forward vector
+        const FVector MuzzleLocation = MuzzleComponent->GetComponentLocation();
+        const FVector MuzzleForward = MuzzleComponent->GetForwardVector();
 
-        // Perform the line trace
-        bool bHit = GetWorld()->LineTraceSingleByChannel(
+        // Compute end point
+        const FVector EndLocation = MuzzleLocation + (MuzzleForward * MaxRange);
+
+        // Setup query params
+        FCollisionQueryParams QueryParams;
+        QueryParams.AddIgnoredActor(Owner);
+        QueryParams.bTraceComplex = true;
+        QueryParams.bReturnPhysicalMaterial = false;
+
+        // Perform line trace
+        FHitResult HitResult;
+        const bool bHit = GetWorld()->LineTraceSingleByChannel(
             HitResult,
-            Start,
-            End,
+            MuzzleLocation,
+            EndLocation,
             ECC_Visibility,
-            TraceParams
+            QueryParams
         );
 
-        // Debug line for visual feedback
+        // Debug line
+        const FColor LineColor = bHit ? FColor::Red : FColor::Green;
         DrawDebugLine(
             GetWorld(),
-            Start,
-            End,
-            bHit ? FColor::Red : FColor::Green,
+            MuzzleLocation,
+            bHit ? HitResult.ImpactPoint : EndLocation,
+            LineColor,
             false,
-            1.0f,
+            2.0f,
             0,
-            2.0f
+            1.0f
         );
+
+        // Telemetry: log basic info
+        UE_LOG(LogTemp, Log, TEXT("OrbitWeaponSystem::FireLaser - Fired from %s"),
+            *Owner->GetName());
 
         if (bHit)
         {
-            // ------------------------------------------------------------------
-            // Telemetry
-            // ------------------------------------------------------------------
-            const AActor* HitActor = HitResult.GetActor();
-            const FVector HitLocation = HitResult.Location;
-            const FVector HitNormal   = HitResult.Normal;
+            // Telemetry: hit details
+            const float Distance = (HitResult.ImpactPoint - MuzzleLocation).Size();
+            UE_LOG(LogTemp, Log, TEXT("  Hit %s at %.2f units"),
+                *HitResult.GetActor()->GetName(), Distance);
 
-            UE_LOG(
-                LogTemp,
-                Log,
-                TEXT("[Orbit] Laser hit '%s' at %s (Normal: %s)"),
-                HitActor ? *HitActor->GetName() : TEXT("None"),
-                *HitLocation.ToString(),
-                *HitNormal.ToString()
-            );
+            // Damage application
+            float DamageApplied = DamageAmount;
 
-            // ------------------------------------------------------------------
-            // Damage
-            // ------------------------------------------------------------------
-            const FVector ShotDirection = (End - Start).GetSafeNormal();
-
-            UGameplayStatics::ApplyPointDamage(
-                HitActor,
-                BaseDamage,
-                ShotDirection,
-                HitResult,
-                GetOwner()->GetInstigatorController(),
-                this,
-                DamageType
-            );
-
-            // ------------------------------------------------------------------
-            // Impact effect
-            // ------------------------------------------------------------------
-            if (ImpactEffect)
+            // If the hit actor implements a custom damage interface, let it handle damage
+            if (HitResult.GetActor()->GetClass()->ImplementsInterface(UDamageable::StaticClass()))
             {
-                UGameplayStatics::SpawnEmitterAtLocation(
-                    GetWorld(),
-                    ImpactEffect,
-                    HitLocation,
-                    HitNormal.Rotation(),
-                    true
+                IDamageable::Execute_ApplyDamage(HitResult.GetActor(), DamageApplied);
+            }
+            else
+            {
+                // Fallback to generic damage system
+                UGameplayStatics::ApplyDamage(
+                    HitResult.GetActor(),
+                    DamageApplied,
+                    Owner->GetInstigatorController(),
+                    Owner,
+                    UDamageType::StaticClass()
                 );
             }
+
+            // Telemetry: damage applied
+            UE_LOG(LogTemp, Log, TEXT("  Applied %.2f damage to %s"),
+                DamageApplied, *HitResult.GetActor()->GetName());
+        }
+        else
+        {
+            UE_LOG(LogTemp, Log, TEXT("  No hit detected"));
         }
     }
 
-    // ------------------------------------------------------------------
-    // Configuration helpers
-    // ------------------------------------------------------------------
-
-    void UOrbitWeaponSystem::SetBaseDamage(float Damage)
+    // --------------------------------------------------------------------
+    // TickComponent
+    // --------------------------------------------------------------------
+    void OrbitWeaponSystem::TickComponent(
+        float DeltaTime,
+        ELevelTick TickType,
+        FActorComponentTickFunction* ThisTickFunction)
     {
-        BaseDamage = Damage;
+        Super::TickComponent(DeltaTime, TickType, ThisTickFunction);
+
+        // Example: auto fire every 0.5 seconds
+        FireTimer += DeltaTime;
+        if (FireTimer >= FireInterval)
+        {
+            FireTimer = 0.0f;
+            FireLaser();
+        }
     }
 
-    void UOrbitWeaponSystem::SetDamageType(TSubclassOf<UDamageType> InDamageType)
+    // --------------------------------------------------------------------
+    // Setup
+    // --------------------------------------------------------------------
+    void OrbitWeaponSystem::BeginPlay()
     {
-        DamageType = InDamageType;
-    }
+        Super::BeginPlay();
 
-    void UOrbitWeaponSystem::SetImpactEffect(UParticleSystem* Effect)
-    {
-        ImpactEffect = Effect;
+        Owner = GetOwner();
+        if (!MuzzleComponent)
+        {
+            UE_LOG(LogTemp, Warning, TEXT("OrbitWeaponSystem::BeginPlay - MuzzleComponent not set"));
+        }
     }
 }
