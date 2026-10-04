@@ -1,127 +1,121 @@
 // OrbitSaveGame.cpp
-// ---------------
-// UE5 C++ implementation for serializing a USaveGame derived class to a binary .sav file.
+// Implements binary serialization for Orbit's save‑game data.
 
 #include "OrbitSaveGame.h"
 #include "Misc/FileHelper.h"
-#include "Misc/Paths.h"
 #include "Serialization/BufferArchive.h"
 #include "Serialization/MemoryReader.h"
+#include "Engine/Engine.h"
 
-//////////////////////////////////////////////////////////////////////////
-// UOrbitSaveGame
-//////////////////////////////////////////////////////////////////////////
+#if WITH_EDITOR
+#include "Editor.h"
+#endif
 
-/**
- * Override the base USaveGame serialization routine.
- * All UPROPERTY members marked with `SaveGame` will be automatically
- * serialized by the engine, but we provide a manual implementation
- * here to demonstrate binary serialization to a .sav file.
- */
-void UOrbitSaveGame::Serialize(FArchive& Ar)
+// -----------------------------------------------------------------------------
+// Helper: Log a message to the UE5 output log.
+// -----------------------------------------------------------------------------
+static void Log(const FString& Message)
 {
-    Super::Serialize(Ar);
-
-    // Example properties that might exist in the save game.
-    // Replace or extend these with your actual game state.
-    Ar << OrbitalPositions;   // TArray<FVector>
-    Ar << OrbitalTimes;       // TArray<float>
-    Ar << PlayerScore;        // int32
-    Ar << bIsGamePaused;      // bool
+#if WITH_EDITOR
+    if (GEngine)
+    {
+        GEngine->AddOnScreenDebugMessage(-1, 5.f, FColor::Cyan, Message);
+    }
+#endif
+    UE_LOG(LogTemp, Log, TEXT("%s"), *Message);
 }
 
-/**
- * Serializes the current UOrbitSaveGame instance to a binary buffer
- * and writes it to disk as a .sav file.
- *
- * @param SaveGame   The save game object to serialize.
- * @param FileName   The desired file name (without path). The file will be
- *                   written to the game's Saved directory.
- * @return true if the file was written successfully, false otherwise.
- */
-bool UOrbitSaveGame::SaveGameToFile(UOrbitSaveGame* SaveGame, const FString& FileName)
+// -----------------------------------------------------------------------------
+// Save the current game state to a binary .sav file.
+// -----------------------------------------------------------------------------
+bool UOrbitSaveGame::SaveToFile(const FString& FilePath)
 {
-    if (!SaveGame)
+    // Serialize this UObject into a byte array.
+    TArray<uint8> SaveData;
+    FBufferArchive Writer(SaveData, true);
+
+    // The << operator for UObject will call Serialize internally.
+    Writer << this;
+
+    // Write the byte array to disk.
+    if (!FFileHelper::SaveArrayToFile(SaveData, *FilePath))
     {
-        UE_LOG(LogTemp, Warning, TEXT("SaveGameToFile: SaveGame is null."));
+        Log(FString::Printf(TEXT("OrbitSaveGame::SaveToFile FAILED: %s"), *FilePath));
         return false;
     }
 
-    // Serialize the object into a binary buffer.
-    FBufferArchive Ar;
-    SaveGame->Serialize(Ar);
-
-    // Build the full path: <GameDir>/Saved/SaveGames/<FileName>.sav
-    FString FullPath = FPaths::Combine(
-        FPaths::ProjectSavedDir(),
-        TEXT("SaveGames"),
-        FileName + TEXT(".sav")
-    );
-
-    // Ensure the directory exists.
-    FPaths::CreateDirectoryTree(FPaths::GetPath(FullPath));
-
-    // Write the buffer to disk.
-    bool bSuccess = FFileHelper::SaveArrayToFile(Ar, *FullPath);
-
-    if (!bSuccess)
-    {
-        UE_LOG(LogTemp, Error, TEXT("SaveGameToFile: Failed to write %s"), *FullPath);
-    }
-    else
-    {
-        UE_LOG(LogTemp, Log, TEXT("SaveGameToFile: Successfully wrote %s"), *FullPath);
-    }
-
-    // Clean up the archive.
-    Ar.FlushCache();
-    Ar.Empty();
-
-    return bSuccess;
+    Log(FString::Printf(TEXT("OrbitSaveGame::SaveToFile SUCCESS: %s"), *FilePath));
+    return true;
 }
 
-/**
- * Loads a UOrbitSaveGame instance from a binary .sav file.
- *
- * @param FileName   The file name (without path) to load from.
- * @return A new UOrbitSaveGame instance populated with the loaded data,
- *         or nullptr if loading failed.
- */
-UOrbitSaveGame* UOrbitSaveGame::LoadGameFromFile(const FString& FileName)
+// -----------------------------------------------------------------------------
+// Load a game state from a binary .sav file.
+// -----------------------------------------------------------------------------
+UOrbitSaveGame* UOrbitSaveGame::LoadFromFile(const FString& FilePath)
 {
-    // Build the full path: <GameDir>/Saved/SaveGames/<FileName>.sav
-    FString FullPath = FPaths::Combine(
-        FPaths::ProjectSavedDir(),
-        TEXT("SaveGames"),
-        FileName + TEXT(".sav")
-    );
-
-    if (!FPaths::FileExists(FullPath))
-    {
-        UE_LOG(LogTemp, Warning, TEXT("LoadGameFromFile: File %s does not exist."), *FullPath);
-        return nullptr;
-    }
-
     // Read the file into a byte array.
-    TArray<uint8> FileData;
-    if (!FFileHelper::LoadFileToArray(FileData, *FullPath))
+    TArray<uint8> LoadData;
+    if (!FFileHelper::LoadFileToArray(LoadData, *FilePath))
     {
-        UE_LOG(LogTemp, Error, TEXT("LoadGameFromFile: Failed to read %s"), *FullPath);
+        Log(FString::Printf(TEXT("OrbitSaveGame::LoadFromFile FAILED: %s"), *FilePath));
         return nullptr;
     }
 
-    // Create a new instance of the save game class.
+    // Create a new instance of the save game object.
     UOrbitSaveGame* LoadedGame = NewObject<UOrbitSaveGame>();
     if (!LoadedGame)
     {
-        UE_LOG(LogTemp, Error, TEXT("LoadGameFromFile: Failed to create UOrbitSaveGame instance."));
+        Log(TEXT("OrbitSaveGame::LoadFromFile FAILED: Could not create UOrbitSaveGame instance."));
         return nullptr;
     }
 
-    // Deserialize the data into the new instance.
-    FMemoryReader Ar(FileData, true);
-    LoadedGame->Serialize(Ar);
+    // Deserialize the byte array into the new object.
+    FMemoryReader Reader(LoadData, true);
+    Reader << LoadedGame;
 
-    UE_LOG(LogTemp, Log, TEXT("LoadGameFromFile: Successfully loaded %s"), *FullPath);
+    Log(FString::Printf(TEXT("OrbitSaveGame::LoadFromFile SUCCESS: %s"), *FilePath));
+    return LoadedGame;
+}
+
+// -----------------------------------------------------------------------------
+// Convenience wrapper: Save the current game state to the default slot.
+// -----------------------------------------------------------------------------
+bool UOrbitSaveGame::SaveToDefaultSlot()
+{
+    const FString SlotName = TEXT("OrbitDefaultSlot");
+    const int32 UserIndex = 0;
+
+    UOrbitSaveGame* SaveGameInstance = Cast<UOrbitSaveGame>(UGameplayStatics::CreateSaveGameObject(UOrbitSaveGame::StaticClass()));
+    if (!SaveGameInstance)
+    {
+        Log(TEXT("OrbitSaveGame::SaveToDefaultSlot FAILED: Could not create save game object."));
+        return false;
+    }
+
+    // Copy the current state into the new instance.
+    *SaveGameInstance = *this;
+
+    return UGameplayStatics::SaveGameToSlot(SaveGameInstance, SlotName, UserIndex);
+}
+
+// -----------------------------------------------------------------------------
+// Convenience wrapper: Load the game state from the default slot.
+// -----------------------------------------------------------------------------
+UOrbitSaveGame* UOrbitSaveGame::LoadFromDefaultSlot()
+{
+    const FString SlotName = TEXT("OrbitDefaultSlot");
+    const int32 UserIndex = 0;
+
+    if (!UGameplayStatics::DoesSaveGameExist(SlotName, UserIndex))
+    {
+        Log(TEXT("OrbitSaveGame::LoadFromDefaultSlot FAILED: No save slot found."));
+        return nullptr;
+    }
+
+    UOrbitSaveGame* LoadedGame = Cast<UOrbitSaveGame>(UGameplayStatics::LoadGameFromSlot(SlotName, UserIndex));
+    if (!LoadedGame)
+    {
+        Log(TEXT("OrbitSaveGame::LoadFromDefaultSlot FAILED: Could not load save game."));
+    }
     return LoadedGame;
 }
