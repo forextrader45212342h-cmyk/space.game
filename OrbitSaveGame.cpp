@@ -1,165 +1,105 @@
 // OrbitSaveGame.cpp
 // ---------------
-// Implements binary serialization for the Orbit save‑game system.
-// The class UOrbitSaveGame is defined in OrbitSaveGame.h and derives from USaveGame.
-// This file provides helper functions to write/read the game state to a .sav binary file
-// as well as the standard UE5 slot‑based save/load helpers.
+// Serialises the current game state to a binary .sav file and restores it back.
+// The implementation follows UE5 conventions – a USTRUCT that can be
+// streamed with the << operator, and a UCLASS that exposes the
+// Save/Load functions to Blueprint/Editor if desired.
 
 #include "OrbitSaveGame.h"
-
+#include "OrbitGameState.h"          // The struct that holds the serialisable state
+#include "OrbitEngine.h"             // Access to the engine singleton
 #include "Misc/FileHelper.h"
+#include "Misc/Paths.h"
 #include "Serialization/BufferArchive.h"
 #include "Serialization/MemoryReader.h"
-#include "Kismet/GameplayStatics.h"
 
-//////////////////////////////////////////////////////////////////////////
-// UOrbitSaveGame
-//////////////////////////////////////////////////////////////////////////
-
-/**
- * Saves the current game state to a UE5 slot.
- *
- * @param SlotName  The name of the slot to write to.
- * @param UserIndex The user index (usually 0 for single‑player).
- */
-void UOrbitSaveGame::SaveGameToSlot(const FString& SlotName, int32 UserIndex)
+namespace Orbit
 {
-    // Create a new save‑game object of our custom type.
-    UOrbitSaveGame* SaveGameInstance = Cast<UOrbitSaveGame>(UGameplayStatics::CreateSaveGameObject(UOrbitSaveGame::StaticClass()));
-    if (!SaveGameInstance)
+    // ------------------------------------------------------------------
+    // Helper: Convert a FOrbitGameState to a binary blob
+    // ------------------------------------------------------------------
+    static bool SerializeGameState(const FOrbitGameState& State, TArray<uint8>& OutData)
     {
-        UE_LOG(LogTemp, Error, TEXT("Failed to create UOrbitSaveGame instance."));
-        return;
+        FBufferArchive Ar;
+        Ar << const_cast<FOrbitGameState&>(State);   // << expects a non‑const reference
+        OutData = Ar;
+        return true;
     }
 
     // ------------------------------------------------------------------
-    // Populate the save‑game object with the current state.
+    // Helper: Convert a binary blob back into a FOrbitGameState
     // ------------------------------------------------------------------
-    // These assignments are just examples – replace them with your actual
-    // game logic that pulls data from the world, player controller, etc.
-    // ------------------------------------------------------------------
-    if (GEngine && GEngine->GetWorld())
+    static bool DeserializeGameState(const TArray<uint8>& InData, FOrbitGameState& OutState)
     {
-        // Example: capture the player pawn's location & rotation.
-        APawn* PlayerPawn = GEngine->GetWorld()->GetFirstPlayerController()->GetPawn();
-        if (PlayerPawn)
+        FMemoryReader Ar(InData, true);
+        Ar << OutState;
+        return true;
+    }
+
+    // ------------------------------------------------------------------
+    // Public API – Save the current state to a .sav file
+    // ------------------------------------------------------------------
+    bool UOrbitSaveGame::SaveGame(const FString& SlotName)
+    {
+        // 1. Grab the current state from the engine
+        const FOrbitGameState CurrentState = OrbitEngine::Get()->GetGameState();
+
+        // 2. Serialise it into a byte array
+        TArray<uint8> SerializedData;
+        if (!SerializeGameState(CurrentState, SerializedData))
         {
-            SaveGameInstance->PlayerLocation = PlayerPawn->GetActorLocation();
-            SaveGameInstance->PlayerRotation = PlayerPawn->GetActorRotation();
+            UE_LOG(LogOrbit, Error, TEXT("Failed to serialise game state for slot '%s'."), *SlotName);
+            return false;
         }
 
-        // Example: capture a simple health value.
-        // (Replace with your own health component or variable.)
-        // SaveGameInstance->PlayerHealth = ...;
+        // 3. Build the full path – <Saved>/<SlotName>.sav
+        const FString FilePath = FPaths::Combine(
+            FPaths::ProjectSavedDir(),
+            SlotName + TEXT(".sav")
+        );
 
-        // Example: capture inventory items.
-        // SaveGameInstance->Inventory = ...;
-    }
-
-    // Write the object to the specified slot.
-    if (!UGameplayStatics::SaveGameToSlot(SaveGameInstance, SlotName, UserIndex))
-    {
-        UE_LOG(LogTemp, Error, TEXT("Failed to save game to slot '%s'."), *SlotName);
-    }
-}
-
-/**
- * Loads a game state from a UE5 slot.
- *
- * @param SlotName  The name of the slot to read from.
- * @param UserIndex The user index (usually 0 for single‑player).
- * @return The loaded UOrbitSaveGame instance, or nullptr if the slot does not exist.
- */
-UOrbitSaveGame* UOrbitSaveGame::LoadGameFromSlot(const FString& SlotName, int32 UserIndex)
-{
-    if (!UGameplayStatics::DoesSaveGameExist(SlotName, UserIndex))
-    {
-        UE_LOG(LogTemp, Warning, TEXT("Save slot '%s' does not exist."), *SlotName);
-        return nullptr;
-    }
-
-    USaveGame* LoadedGame = UGameplayStatics::LoadGameFromSlot(SlotName, UserIndex);
-    return Cast<UOrbitSaveGame>(LoadedGame);
-}
-
-/**
- * Serializes the current game state to a binary .sav file.
- *
- * @param FilePath The full path to the file to write.
- * @return true if the file was written successfully.
- */
-bool UOrbitSaveGame::SaveGameToBinary(const FString& FilePath)
-{
-    // Create a new save‑game object and populate it.
-    UOrbitSaveGame* SaveGameInstance = Cast<UOrbitSaveGame>(UGameplayStatics::CreateSaveGameObject(UOrbitSaveGame::StaticClass()));
-    if (!SaveGameInstance)
-    {
-        UE_LOG(LogTemp, Error, TEXT("Failed to create UOrbitSaveGame instance for binary save."));
-        return false;
-    }
-
-    // ------------------------------------------------------------------
-    // Populate the save‑game object with the current state.
-    // ------------------------------------------------------------------
-    if (GEngine && GEngine->GetWorld())
-    {
-        APawn* PlayerPawn = GEngine->GetWorld()->GetFirstPlayerController()->GetPawn();
-        if (PlayerPawn)
+        // 4. Write the array to disk
+        if (!FFileHelper::SaveArrayToFile(SerializedData, *FilePath))
         {
-            SaveGameInstance->PlayerLocation = PlayerPawn->GetActorLocation();
-            SaveGameInstance->PlayerRotation = PlayerPawn->GetActorRotation();
+            UE_LOG(LogOrbit, Error, TEXT("Failed to write save file '%s'."), *FilePath);
+            return false;
         }
+
+        UE_LOG(LogOrbit, Log, TEXT("Game state successfully saved to '%s'."), *FilePath);
+        return true;
     }
 
     // ------------------------------------------------------------------
-    // Serialize the object into a buffer archive.
+    // Public API – Load a previously saved state from a .sav file
     // ------------------------------------------------------------------
-    FBufferArchive BinaryArchive;
-    BinaryArchive << *SaveGameInstance;
-
-    // ------------------------------------------------------------------
-    // Write the buffer to disk.
-    // ------------------------------------------------------------------
-    bool bSuccess = FFileHelper::SaveArrayToFile(BinaryArchive, *FilePath);
-
-    // Clean up the archive.
-    BinaryArchive.FlushCache();
-    BinaryArchive.Empty();
-
-    if (!bSuccess)
+    bool UOrbitSaveGame::LoadGame(const FString& SlotName)
     {
-        UE_LOG(LogTemp, Error, TEXT("Failed to write binary save to '%s'."), *FilePath);
+        // 1. Build the full path – <Saved>/<SlotName>.sav
+        const FString FilePath = FPaths::Combine(
+            FPaths::ProjectSavedDir(),
+            SlotName + TEXT(".sav")
+        );
+
+        // 2. Read the file into a byte array
+        TArray<uint8> FileData;
+        if (!FFileHelper::LoadFileToArray(FileData, *FilePath))
+        {
+            UE_LOG(LogOrbit, Error, TEXT("Failed to load save file '%s'."), *FilePath);
+            return false;
+        }
+
+        // 3. Deserialise into a state struct
+        FOrbitGameState LoadedState;
+        if (!DeserializeGameState(FileData, LoadedState))
+        {
+            UE_LOG(LogOrbit, Error, TEXT("Failed to deserialise game state from '%s'."), *FilePath);
+            return false;
+        }
+
+        // 4. Push the state back into the engine
+        OrbitEngine::Get()->SetGameState(LoadedState);
+
+        UE_LOG(LogOrbit, Log, TEXT("Game state successfully loaded from '%s'."), *FilePath);
+        return true;
     }
-
-    return bSuccess;
-}
-
-/**
- * Loads a game state from a binary .sav file.
- *
- * @param FilePath The full path to the file to read.
- * @return The loaded UOrbitSaveGame instance, or nullptr on failure.
- */
-UOrbitSaveGame* UOrbitSaveGame::LoadGameFromBinary(const FString& FilePath)
-{
-    TArray<uint8> BinaryData;
-    if (!FFileHelper::LoadFileToArray(BinaryData, *FilePath))
-    {
-        UE_LOG(LogTemp, Error, TEXT("Failed to read binary save file '%s'."), *FilePath);
-        return nullptr;
-    }
-
-    // Create a memory reader from the binary data.
-    FMemoryReader BinaryReader = FMemoryReader(BinaryData, true);
-    BinaryReader.Seek(0);
-
-    // Create a new save‑game object and deserialize into it.
-    UOrbitSaveGame* LoadedGame = NewObject<UOrbitSaveGame>();
-    BinaryReader << *LoadedGame;
-
-    // Clean up the reader.
-    BinaryReader.FlushCache();
-    BinaryData.Empty();
-
-    return LoadedGame;
 }
