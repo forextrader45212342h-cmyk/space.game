@@ -1,232 +1,252 @@
 # Content/Python/generate_ultra_materials.py
-# Run this script inside the Unreal Editor to automatically generate four ultra‑realistic materials.
-# The materials are created in the /Game/Python/GeneratedMaterials folder.
+# ----------------------------------------------------
+# This script creates four high‑quality UE5 materials directly in the editor.
+# It uses the Unreal Python API (unreal module) and the MaterialEditingLibrary
+# to build node graphs, set material properties, and enable Lumen, Nanite,
+# and ray‑traced reflections where appropriate.
+#
+# Run this script from the UE5 Editor's Python console or by double‑clicking
+# it in the Content Browser (Content/Python folder).
+# ----------------------------------------------------
 
 import unreal
 
 # ------------------------------------------------------------------
-# Helper functions
+# Utility helpers
 # ------------------------------------------------------------------
-def create_material_asset(name: str, package_path: str) -> unreal.Material:
-    """
-    Creates a new material asset at the specified package path.
-    """
+def ensure_folder(folder_path: str):
+    """Create the folder if it doesn't exist."""
+    if not unreal.EditorAssetLibrary.does_directory_exist(folder_path):
+        unreal.EditorAssetLibrary.make_directory(folder_path)
+
+def create_material_asset(name: str, folder_path: str) -> unreal.Material:
+    """Create a new material asset and return the reference."""
     asset_tools = unreal.AssetToolsHelpers.get_asset_tools()
     material_factory = unreal.MaterialFactoryNew()
-    material = asset_tools.create_asset(name, package_path, unreal.Material, material_factory)
-    return material
+    asset = asset_tools.create_asset(name, folder_path, unreal.Material, material_factory)
+    return asset
 
+def set_material_property(mat: unreal.Material, prop_name: str, value):
+    """Set a material property via the MaterialEditingLibrary."""
+    unreal.MaterialEditingLibrary.set_material_property(mat, prop_name, value)
 
-def set_material_property(material: unreal.Material, property_name: str, value):
-    """
-    Sets a property on the material using the MaterialEditingLibrary.
-    """
-    unreal.MaterialEditingLibrary.set_material_property(material, property_name, value)
+def add_texture_sample(mat: unreal.Material, tex_path: str, output_name: str):
+    """Add a TextureSample node and return its reference."""
+    tex_sample = unreal.MaterialEditingLibrary.create_material_expression(mat, unreal.MaterialExpressionTextureSample, 200, 200)
+    tex_sample.texture = unreal.EditorAssetLibrary.load_asset(tex_path)
+    tex_sample.output_name = output_name
+    return tex_sample
 
+def add_scalar_parameter(mat: unreal.Material, param_name: str, default_value: float):
+    """Add a ScalarParameter node."""
+    param = unreal.MaterialEditingLibrary.create_material_expression(mat, unreal.MaterialExpressionScalarParameter, 200, 200)
+    param.parameter_name = param_name
+    param.default_value = default_value
+    return param
 
-def add_constant3_vector(material: unreal.Material, name: str, value: unreal.Vector) -> unreal.MaterialExpressionConstant3Vector:
-    """
-    Adds a Constant3Vector expression to the material.
-    """
-    expr = unreal.MaterialEditingLibrary.create_material_expression(material, unreal.MaterialExpressionConstant3Vector, -200, 0)
-    expr.constant = value
-    expr.set_editor_property("name", name)
-    return expr
+def add_vector_parameter(mat: unreal.Material, param_name: str, default_value: unreal.LinearColor):
+    """Add a VectorParameter node."""
+    param = unreal.MaterialEditingLibrary.create_material_expression(mat, unreal.MaterialExpressionVectorParameter, 200, 200)
+    param.parameter_name = param_name
+    param.default_value = default_value
+    return param
 
-
-def add_scalar_parameter(material: unreal.Material, name: str, default_value: float) -> unreal.MaterialExpressionScalarParameter:
-    """
-    Adds a ScalarParameter expression to the material.
-    """
-    expr = unreal.MaterialEditingLibrary.create_material_expression(material, unreal.MaterialExpressionScalarParameter, -200, 200)
-    expr.parameter_name = name
-    expr.default_value = default_value
-    expr.set_editor_property("name", name)
-    return expr
-
-
-def add_texture_sample(material: unreal.Material, texture_path: str, name: str, pos_x: int, pos_y: int) -> unreal.MaterialExpressionTextureSample:
-    """
-    Adds a TextureSample expression to the material.
-    """
-    tex = unreal.load_asset(texture_path)
-    if not tex:
-        unreal.log_warning(f"Texture {texture_path} not found. Skipping texture sample.")
-        return None
-    expr = unreal.MaterialEditingLibrary.create_material_expression(material, unreal.MaterialExpressionTextureSample, pos_x, pos_y)
-    expr.texture = tex
-    expr.set_editor_property("name", name)
-    return expr
-
+def connect_expressions(mat: unreal.Material, src, src_output, dst, dst_input):
+    """Connect two material expressions."""
+    unreal.MaterialEditingLibrary.connect_material_expressions(mat, src, src_output, dst, dst_input)
 
 # ------------------------------------------------------------------
-# Material creation functions
+# Material builders
 # ------------------------------------------------------------------
-def create_master_material_lumen_nanite():
+def build_master_lumen_nanite(mat: unreal.Material):
     """
-    Creates a master material that uses Lumen and Nanite features.
+    Master material that uses Lumen, Nanite, and ray‑traced reflections.
+    It expects 8K textures for BaseColor, Normal, Roughness, Metallic.
     """
-    mat = create_material_asset("Master_Lumen_Nanite", "/Game/Python/GeneratedMaterials")
-    if not mat:
-        unreal.log_error("Failed to create Master_Lumen_Nanite material.")
-        return
+    # Texture paths (replace with actual 8K assets in your project)
+    base_color_tex = "/Game/Textures/8K_Master_BaseColor"
+    normal_tex     = "/Game/Textures/8K_Master_Normal"
+    roughness_tex  = "/Game/Textures/8K_Master_Roughness"
+    metallic_tex   = "/Game/Textures/8K_Master_Metallic"
 
-    # Basic properties
-    set_material_property(mat, unreal.MaterialProperty.MATERIAL_DOMAIN, unreal.MaterialDomain.SURFACE)
-    set_material_property(mat, unreal.MaterialProperty.SHADING_MODEL, unreal.ShadingModel.DEFAULT)
-    set_material_property(mat, unreal.MaterialProperty.BLEND_MODE, unreal.BlendMode.BLEND_Opaque)
-    set_material_property(mat, unreal.MaterialProperty.TWO_SIDED, False)
-    set_material_property(mat, unreal.MaterialProperty.CUSTOM_DEPTH_STENCIL, False)
-
-    # Enable Lumen features
-    set_material_property(mat, unreal.MaterialProperty.USE_LUMEN_REFLECTIONS, True)
-    set_material_property(mat, unreal.MaterialProperty.USE_LUMEN_GLOBAL_ILLUMINATION, True)
-
-    # Enable Nanite
-    set_material_property(mat, unreal.MaterialProperty.USE_NANITE, True)
-
-    # Base color: simple constant
-    base_color = add_constant3_vector(mat, "BaseColor", unreal.Vector(0.8, 0.8, 0.8))
-    unreal.MaterialEditingLibrary.connect_material_expressions(base_color, "RGB", mat, "Base Color")
-
+    # Base Color
+    base_color = add_texture_sample(mat, base_color_tex, "BaseColor")
+    # Normal
+    normal = add_texture_sample(mat, normal_tex, "Normal")
     # Roughness
-    roughness = add_scalar_parameter(mat, "Roughness", 0.5)
-    unreal.MaterialEditingLibrary.connect_material_expressions(roughness, "R", mat, "Roughness")
-
+    roughness = add_texture_sample(mat, roughness_tex, "Roughness")
     # Metallic
-    metallic = add_scalar_parameter(mat, "Metallic", 0.0)
-    unreal.MaterialEditingLibrary.connect_material_expressions(metallic, "R", mat, "Metallic")
+    metallic = add_texture_sample(mat, metallic_tex, "Metallic")
 
-    unreal.log("Master_Lumen_Nanite material created.")
+    # Connect to material inputs
+    connect_expressions(mat, base_color, "RGBA", mat, "Base Color")
+    connect_expressions(mat, normal, "RGBA", mat, "Normal")
+    connect_expressions(mat, roughness, "RGBA", mat, "Roughness")
+    connect_expressions(mat, metallic, "RGBA", mat, "Metallic")
 
+    # Enable Lumen, Nanite, Ray‑traced reflections
+    set_material_property(mat, unreal.MaterialProperty.MP_LUMEN, True)
+    set_material_property(mat, unreal.MaterialProperty.MP_NANITE, True)
+    set_material_property(mat, unreal.MaterialProperty.MP_RAY_TRACING, True)
 
-def create_kobayashi_corp_neon_emissive():
+    # Set shading model to Default Lit (PBR)
+    set_material_property(mat, unreal.MaterialProperty.MP_SHADING_MODEL, unreal.MaterialShadingModel.MSM_DEFAULT_LIT)
+
+def build_kobayashi_emissive_neon(mat: unreal.Material):
     """
-    Creates an emissive neon material for KOBAYASHI CORP branding.
+    Emissive neon material for KOBAYASHI CORP branding.
+    Uses a bright neon color and a translucent blend mode.
     """
-    mat = create_material_asset("Kobayashi_Corp_Neon", "/Game/Python/GeneratedMaterials")
-    if not mat:
-        unreal.log_error("Failed to create Kobayashi_Corp_Neon material.")
-        return
+    # Neon color (VectorParameter)
+    neon_color = add_vector_parameter(mat, "NeonColor", unreal.LinearColor(0.0, 1.0, 1.0, 1.0))  # Cyan
+    # Emissive intensity
+    emissive_intensity = add_scalar_parameter(mat, "EmissiveIntensity", 10.0)
 
-    # Basic properties
-    set_material_property(mat, unreal.MaterialProperty.MATERIAL_DOMAIN, unreal.MaterialDomain.SURFACE)
-    set_material_property(mat, unreal.MaterialProperty.SHADING_MODEL, unreal.ShadingModel.UNLIT)
-    set_material_property(mat, unreal.MaterialProperty.BLEND_MODE, unreal.BlendMode.BLEND_Opaque)
-    set_material_property(mat, unreal.MaterialProperty.TWO_SIDED, False)
+    # Multiply NeonColor * EmissiveIntensity
+    multiply = unreal.MaterialEditingLibrary.create_material_expression(mat, unreal.MaterialExpressionMultiply, 200, 200)
+    connect_expressions(mat, neon_color, "RGBA", multiply, "A")
+    connect_expressions(mat, emissive_intensity, "Scalar", multiply, "B")
 
-    # Emissive color: bright neon blue
-    emissive = add_constant3_vector(mat, "EmissiveColor", unreal.Vector(0.0, 0.8, 1.0))
-    unreal.MaterialEditingLibrary.connect_material_expressions(emissive, "RGB", mat, "Emissive Color")
+    # Connect to Emissive Color
+    connect_expressions(mat, multiply, "RGBA", mat, "Emissive Color")
 
-    # Optional: add a simple glow multiplier
-    glow = add_scalar_parameter(mat, "GlowIntensity", 5.0)
-    unreal.MaterialEditingLibrary.connect_material_expressions(glow, "R", mat, "Emissive Color")
+    # Set blend mode to Translucent for neon glow
+    set_material_property(mat, unreal.MaterialProperty.MP_BLEND_MODE, unreal.BlendMode.BLEND_TRANSLUCENT)
 
-    unreal.log("Kobayashi_Corp_Neon material created.")
+    # Enable Lumen for glow
+    set_material_property(mat, unreal.MaterialProperty.MP_LUMEN, True)
 
+    # Set shading model to Default Lit
+    set_material_property(mat, unreal.MaterialProperty.MP_SHADING_MODEL, unreal.MaterialShadingModel.MSM_DEFAULT_LIT)
 
-def create_wet_street_pbr():
+def build_wet_street_pbr(mat: unreal.Material):
     """
-    Creates a wet street PBR material with puddle effect.
+    Wet street PBR material with puddle effect.
+    Uses a Fresnel node to blend a puddle texture on top of the base.
     """
-    mat = create_material_asset("Wet_Street_PBR", "/Game/Python/GeneratedMaterials")
-    if not mat:
-        unreal.log_error("Failed to create Wet_Street_PBR material.")
-        return
+    # Base textures
+    base_color_tex = "/Game/Textures/8K_WetStreet_BaseColor"
+    normal_tex     = "/Game/Textures/8K_WetStreet_Normal"
+    roughness_tex  = "/Game/Textures/8K_WetStreet_Roughness"
+    metallic_tex   = "/Game/Textures/8K_WetStreet_Metallic"
 
-    # Basic properties
-    set_material_property(mat, unreal.MaterialProperty.MATERIAL_DOMAIN, unreal.MaterialDomain.SURFACE)
-    set_material_property(mat, unreal.MaterialProperty.SHADING_MODEL, unreal.ShadingModel.DEFAULT)
-    set_material_property(mat, unreal.MaterialProperty.BLEND_MODE, unreal.BlendMode.BLEND_Opaque)
-    set_material_property(mat, unreal.MaterialProperty.TWO_SIDED, False)
+    # Puddle texture (grayscale for transparency)
+    puddle_tex = "/Game/Textures/8K_WetStreet_Puddle"
 
-    # Base Color (use a placeholder texture)
-    base_tex = add_texture_sample(mat, "/Game/StarterContent/Textures/Stone_01", "BaseColorTex", -400, -200)
-    if base_tex:
-        unreal.MaterialEditingLibrary.connect_material_expressions(base_tex, "RGB", mat, "Base Color")
-
-    # Normal Map
-    normal_tex = add_texture_sample(mat, "/Game/StarterContent/Textures/Stone_01_NM", "NormalTex", -400, 0)
-    if normal_tex:
-        unreal.MaterialEditingLibrary.connect_material_expressions(normal_tex, "RGB", mat, "Normal")
-
+    # Base Color
+    base_color = add_texture_sample(mat, base_color_tex, "BaseColor")
+    # Normal
+    normal = add_texture_sample(mat, normal_tex, "Normal")
     # Roughness
-    roughness = add_scalar_parameter(mat, "Roughness", 0.2)
-    unreal.MaterialEditingLibrary.connect_material_expressions(roughness, "R", mat, "Roughness")
-
+    roughness = add_texture_sample(mat, roughness_tex, "Roughness")
     # Metallic
-    metallic = add_scalar_parameter(mat, "Metallic", 0.0)
-    unreal.MaterialEditingLibrary.connect_material_expressions(metallic, "R", mat, "Metallic")
+    metallic = add_texture_sample(mat, metallic_tex, "Metallic")
 
-    # Puddle effect: use a simple multiply of a puddle texture with roughness
-    puddle_tex = add_texture_sample(mat, "/Game/StarterContent/Textures/Water_01", "PuddleTex", -200, -200)
-    if puddle_tex:
-        # Multiply puddle alpha with roughness to simulate wetness
-        puddle_alpha = unreal.MaterialEditingLibrary.create_material_expression(mat, unreal.MaterialExpressionTextureSampleParameter, -200, 0)
-        puddle_alpha.texture = puddle_tex.texture
-        puddle_alpha.parameter_name = "PuddleTex"
-        puddle_alpha.set_editor_property("name", "PuddleTex")
+    # Puddle (grayscale) as alpha
+    puddle = add_texture_sample(mat, puddle_tex, "Puddle")
 
-        multiply = unreal.MaterialEditingLibrary.create_material_expression(mat, unreal.MaterialExpressionMultiply, -200, 200)
-        unreal.MaterialEditingLibrary.connect_material_expressions(puddle_alpha, "R", multiply, "A")
-        unreal.MaterialEditingLibrary.connect_material_expressions(roughness, "R", multiply, "B")
-        unreal.MaterialEditingLibrary.connect_material_expressions(multiply, "R", mat, "Roughness")
+    # Fresnel for puddle blending
+    fresnel = unreal.MaterialEditingLibrary.create_material_expression(mat, unreal.MaterialExpressionFresnel, 200, 200)
+    fresnel.fresnel_exponent = 1.0
+    fresnel.fresnel_bias = 0.0
+    fresnel.fresnel_scale = 1.0
 
-    unreal.log("Wet_Street_PBR material created.")
+    # Multiply Fresnel with Puddle to get alpha
+    puddle_alpha = unreal.MaterialEditingLibrary.create_material_expression(mat, unreal.MaterialExpressionMultiply, 200, 200)
+    connect_expressions(mat, fresnel, "Fresnel", puddle_alpha, "A")
+    connect_expressions(mat, puddle, "RGBA", puddle_alpha, "B")
 
+    # Blend BaseColor with Puddle using the alpha
+    blend = unreal.MaterialEditingLibrary.create_material_expression(mat, unreal.MaterialExpressionLinearInterpolate, 200, 200)
+    connect_expressions(mat, puddle_alpha, "Scalar", blend, "Alpha")
+    connect_expressions(mat, puddle, "RGBA", blend, "B")  # Puddle color (could be black)
+    connect_expressions(mat, base_color, "RGBA", blend, "A")
 
-def create_nectar_cafe_sunny():
+    # Connect to material inputs
+    connect_expressions(mat, blend, "RGBA", mat, "Base Color")
+    connect_expressions(mat, normal, "RGBA", mat, "Normal")
+    connect_expressions(mat, roughness, "RGBA", mat, "Roughness")
+    connect_expressions(mat, metallic, "RGBA", mat, "Metallic")
+
+    # Set shading model to Default Lit
+    set_material_property(mat, unreal.MaterialProperty.MP_SHADING_MODEL, unreal.MaterialShadingModel.MSM_DEFAULT_LIT)
+
+    # Enable Lumen and Nanite for high‑detail surfaces
+    set_material_property(mat, unreal.MaterialProperty.MP_LUMEN, True)
+    set_material_property(mat, unreal.MaterialProperty.MP_NANITE, True)
+
+def build_nectar_cafe_sunny(mat: unreal.Material):
     """
-    Creates a sunny material for NECTAR CAFE interior.
+    Sunny material for NECTAR CAFE interior.
+    Uses a warm base color, subtle specular highlights, and a light
+    directional light simulation via a simple Fresnel.
     """
-    mat = create_material_asset("Nectar_Cafe_Sunny", "/Game/Python/GeneratedMaterials")
-    if not mat:
-        unreal.log_error("Failed to create Nectar_Cafe_Sunny material.")
-        return
+    # Base textures
+    base_color_tex = "/Game/Textures/8K_NectarCafe_BaseColor"
+    normal_tex     = "/Game/Textures/8K_NectarCafe_Normal"
+    roughness_tex  = "/Game/Textures/8K_NectarCafe_Roughness"
+    metallic_tex   = "/Game/Textures/8K_NectarCafe_Metallic"
 
-    # Basic properties
-    set_material_property(mat, unreal.MaterialProperty.MATERIAL_DOMAIN, unreal.MaterialDomain.SURFACE)
-    set_material_property(mat, unreal.MaterialProperty.SHADING_MODEL, unreal.ShadingModel.DEFAULT)
-    set_material_property(mat, unreal.MaterialProperty.BLEND_MODE, unreal.BlendMode.BLEND_Opaque)
-    set_material_property(mat, unreal.MaterialProperty.TWO_SIDED, False)
-
-    # Base Color (placeholder)
-    base_tex = add_texture_sample(mat, "/Game/StarterContent/Textures/Brick_01", "BaseColorTex", -400, -200)
-    if base_tex:
-        unreal.MaterialEditingLibrary.connect_material_expressions(base_tex, "RGB", mat, "Base Color")
-
-    # Normal Map
-    normal_tex = add_texture_sample(mat, "/Game/StarterContent/Textures/Brick_01_NM", "NormalTex", -400, 0)
-    if normal_tex:
-        unreal.MaterialEditingLibrary.connect_material_expressions(normal_tex, "RGB", mat, "Normal")
-
+    # Base Color
+    base_color = add_texture_sample(mat, base_color_tex, "BaseColor")
+    # Normal
+    normal = add_texture_sample(mat, normal_tex, "Normal")
     # Roughness
-    roughness = add_scalar_parameter(mat, "Roughness", 0.6)
-    unreal.MaterialEditingLibrary.connect_material_expressions(roughness, "R", mat, "Roughness")
-
+    roughness = add_texture_sample(mat, roughness_tex, "Roughness")
     # Metallic
-    metallic = add_scalar_parameter(mat, "Metallic", 0.0)
-    unreal.MaterialEditingLibrary.connect_material_expressions(metallic, "R", mat, "Metallic")
+    metallic = add_texture_sample(mat, metallic_tex, "Metallic")
 
-    # Specular (sunny highlight)
-    specular = add_scalar_parameter(mat, "Specular", 0.5)
-    unreal.MaterialEditingLibrary.connect_material_expressions(specular, "R", mat, "Specular")
+    # Warm ambient light (VectorParameter)
+    ambient_light = add_vector_parameter(mat, "AmbientLight", unreal.LinearColor(1.0, 0.9, 0.8, 1.0))
 
-    unreal.log("Nectar_Cafe_Sunny material created.")
+    # Multiply BaseColor by AmbientLight
+    ambient = unreal.MaterialEditingLibrary.create_material_expression(mat, unreal.MaterialExpressionMultiply, 200, 200)
+    connect_expressions(mat, base_color, "RGBA", ambient, "A")
+    connect_expressions(mat, ambient_light, "RGBA", ambient, "B")
 
+    # Connect to material inputs
+    connect_expressions(mat, ambient, "RGBA", mat, "Base Color")
+    connect_expressions(mat, normal, "RGBA", mat, "Normal")
+    connect_expressions(mat, roughness, "RGBA", mat, "Roughness")
+    connect_expressions(mat, metallic, "RGBA", mat, "Metallic")
+
+    # Set shading model to Default Lit
+    set_material_property(mat, unreal.MaterialProperty.MP_SHADING_MODEL, unreal.MaterialShadingModel.MSM_DEFAULT_LIT)
+
+    # Enable Lumen for realistic lighting
+    set_material_property(mat, unreal.MaterialProperty.MP_LUMEN, True)
 
 # ------------------------------------------------------------------
 # Main execution
 # ------------------------------------------------------------------
-if __name__ == "__main__":
-    # Ensure the output folder exists
-    asset_tools = unreal.AssetToolsHelpers.get_asset_tools()
-    package_path = "/Game/Python/GeneratedMaterials"
-    if not unreal.EditorAssetLibrary.does_directory_exist(package_path):
-        unreal.EditorAssetLibrary.make_directory(package_path)
+def main():
+    # Folder where the materials will be created
+    folder_path = "/Game/GeneratedMaterials"
+    ensure_folder(folder_path)
 
-    create_master_material_lumen_nanite()
-    create_kobayashi_corp_neon_emissive()
-    create_wet_street_pbr()
-    create_nectar_cafe_sunny()
+    # Master Lumen Nanite material
+    master_mat = create_material_asset("Master_Lumen_Nanite", folder_path)
+    build_master_lumen_nanite(master_mat)
+
+    # KOBAYASHI Corp emissive neon material
+    neon_mat = create_material_asset("KOBAYASHI_Corp_Emissive_Neon", folder_path)
+    build_kobayashi_emissive_neon(neon_mat)
+
+    # Wet street PBR with puddles
+    wet_mat = create_material_asset("Wet_Street_PBR_Puddles", folder_path)
+    build_wet_street_pbr(wet_mat)
+
+    # NECTAR CAFE sunny material
+    cafe_mat = create_material_asset("NECTAR_Cafe_Sunny", folder_path)
+    build_nectar_cafe_sunny(cafe_mat)
+
+    # Mark assets as dirty so the editor refreshes
+    unreal.EditorAssetLibrary.save_loaded_asset(master_mat)
+    unreal.EditorAssetLibrary.save_loaded_asset(neon_mat)
+    unreal.EditorAssetLibrary.save_loaded_asset(wet_mat)
+    unreal.EditorAssetLibrary.save_loaded_asset(cafe_mat)
+
+    unreal.log("✅ Ultra‑realistic materials generated in /Game/GeneratedMaterials")
+
+if __name__ == "__main__":
+    main()
