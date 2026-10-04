@@ -1,88 +1,113 @@
 // OrbitSaveGame.cpp
-// ---------------
-// Serialises the current game state to a binary .sav file and restores it back.
-// Uses UE5's FArchive system so the data can be read/written in a platform‑independent
-// binary format.  The implementation is intentionally minimal – you can extend
-// `FOrbitSaveGameData` with any additional game state you need.
+// Implements binary serialization for the OrbitSaveGame class
 
 #include "OrbitSaveGame.h"
-
 #include "Misc/FileHelper.h"
+#include "Misc/Paths.h"
 #include "Serialization/BufferArchive.h"
 #include "Serialization/MemoryReader.h"
-#include "Misc/Paths.h"
 
-namespace Orbit
+//////////////////////////////////////////////////////////////////////////
+// UOrbitSaveGame
+
+UOrbitSaveGame::UOrbitSaveGame()
 {
-    // ------------------------------------------------------------------
-    // Helper struct that holds the data we want to persist.
-    // ------------------------------------------------------------------
-    FOrbitSaveGameData::FOrbitSaveGameData()
-        : PlayerLocation(FVector::ZeroVector)
-        , PlayerRotation(FRotator::ZeroRotator)
-        , Health(100)
-    {
-    }
+	// Default constructor
+}
 
-    // ------------------------------------------------------------------
-    // Serialise the struct to a binary buffer.
-    // ------------------------------------------------------------------
-    void FOrbitSaveGameData::Serialize(FArchive& Ar)
-    {
-        Ar << PlayerLocation;
-        Ar << PlayerRotation;
-        Ar << Health;
-        Ar << InventoryItemIDs;
-    }
+//////////////////////////////////////////////////////////////////////////
+// Serialization helpers
 
-    // ------------------------------------------------------------------
-    // Save the current state to a file.
-    // ------------------------------------------------------------------
-    bool FOrbitSaveGame::Save(const FString& FileName, const FOrbitSaveGameData& Data)
-    {
-        // 1. Write the data into a memory buffer.
-        FBufferArchive BinaryArchive;
-        Data.Serialize(BinaryArchive);
+// Serializes the entire save game object into a binary array
+bool UOrbitSaveGame::SerializeToArray(TArray<uint8>& OutData) const
+{
+	FBufferArchive Ar;
+	Ar << *this;  // Uses the overloaded << operator for USaveGame
+	if (Ar.Num() == 0)
+	{
+		Ar.FlushCache();
+		Ar.Empty();
+		return false;
+	}
+	OutData = Ar.GetBuffer();
+	Ar.FlushCache();
+	Ar.Empty();
+	return true;
+}
 
-        // 2. Convert the buffer to a TArray<uint8> that can be written to disk.
-        TArray<uint8> BinaryData;
-        BinaryData.Append(BinaryArchive.GetData(), BinaryArchive.Num());
+// Deserializes the entire save game object from a binary array
+bool UOrbitSaveGame::DeserializeFromArray(const TArray<uint8>& InData)
+{
+	FMemoryReader Ar(InData);
+	Ar << *this;  // Uses the overloaded << operator for USaveGame
+	return true;
+}
 
-        // 3. Write the binary data to the specified file.
-        const FString FullPath = FPaths::ProjectSavedDir() / FileName;
-        bool bSuccess = FFileHelper::SaveArrayToFile(BinaryData, *FullPath);
+//////////////////////////////////////////////////////////////////////////
+// File I/O
 
-        // 4. Clean up the archive.
-        BinaryArchive.FlushCache();
-        BinaryArchive.Empty();
+// Saves the current state to a .sav file
+bool UOrbitSaveGame::SaveGameToFile(const FString& FilePath) const
+{
+	TArray<uint8> SaveData;
+	if (!SerializeToArray(SaveData))
+	{
+		UE_LOG(LogTemp, Error, TEXT("OrbitSaveGame: Failed to serialize data."));
+		return false;
+	}
 
-        return bSuccess;
-    }
+	if (!FFileHelper::SaveArrayToFile(SaveData, *FilePath))
+	{
+		UE_LOG(LogTemp, Error, TEXT("OrbitSaveGame: Failed to write file %s."), *FilePath);
+		return false;
+	}
 
-    // ------------------------------------------------------------------
-    // Load the state from a file.
-    // ------------------------------------------------------------------
-    bool FOrbitSaveGame::Load(const FString& FileName, FOrbitSaveGameData& OutData)
-    {
-        // 1. Read the binary file into a TArray<uint8>.
-        const FString FullPath = FPaths::ProjectSavedDir() / FileName;
-        TArray<uint8> BinaryData;
-        if (!FFileHelper::LoadFileToArray(BinaryData, *FullPath))
-        {
-            return false;
-        }
+	UE_LOG(LogTemp, Log, TEXT("OrbitSaveGame: Successfully saved to %s."), *FilePath);
+	return true;
+}
 
-        // 2. Create a memory reader from the binary data.
-        FMemoryReader BinaryReader(BinaryData, true);
-        BinaryReader.Seek(0);
+// Loads a save game from a .sav file
+UOrbitSaveGame* UOrbitSaveGame::LoadGameFromFile(const FString& FilePath)
+{
+	if (!FPaths::FileExists(FilePath))
+	{
+		UE_LOG(LogTemp, Warning, TEXT("OrbitSaveGame: File %s does not exist."), *FilePath);
+		return nullptr;
+	}
 
-        // 3. Deserialize into the output struct.
-        OutData.Serialize(BinaryReader);
+	TArray<uint8> LoadData;
+	if (!FFileHelper::LoadFileToArray(LoadData, *FilePath))
+	{
+		UE_LOG(LogTemp, Error, TEXT("OrbitSaveGame: Failed to read file %s."), *FilePath);
+		return nullptr;
+	}
 
-        // 4. Clean up the reader.
-        BinaryReader.FlushCache();
-        BinaryReader.Close();
+	UOrbitSaveGame* LoadedGame = NewObject<UOrbitSaveGame>();
+	if (!LoadedGame->DeserializeFromArray(LoadData))
+	{
+		UE_LOG(LogTemp, Error, TEXT("OrbitSaveGame: Failed to deserialize data from %s."), *FilePath);
+		return nullptr;
+	}
 
-        return true;
-    }
+	UE_LOG(LogTemp, Log, TEXT("OrbitSaveGame: Successfully loaded from %s."), *FilePath);
+	return LoadedGame;
+}
+
+//////////////////////////////////////////////////////////////////////////
+// USaveGame serialization
+
+// The following operator overloads are required for USaveGame to serialize its properties.
+// They are automatically generated by the UE4/UE5 reflection system, but we provide explicit
+// overloads here for clarity and to ensure binary compatibility.
+
+void UOrbitSaveGame::Serialize(FArchive& Ar)
+{
+	Super::Serialize(Ar);  // Serialize base USaveGame data
+
+	// Example: serialize a simple array of positions and rotations
+	Ar << OrbitPositions;
+	Ar << OrbitRotations;
+
+	// If you have additional custom data, serialize it here
+	// Ar << CustomData;
 }
