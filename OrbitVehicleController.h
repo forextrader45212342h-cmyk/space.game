@@ -1,146 +1,103 @@
 // OrbitVehicleController.h
-// ---------------
-// UE5 C++ component that drives a futuristic spaceship using a set of
-// thruster vectors.  The component exposes a simple API for applying
-// thrust, yaw, pitch and roll, and keeps track of the current speed
-// and velocity.  It is intended to be attached to an APawn or
-// AActor that represents the ship.
-//
-//  Author: Principal UE5 C++ Engineer
-//  Date:   2026‑10‑04
-// -----------------------------------------------------------------
-
 #pragma once
 
 #include "CoreMinimal.h"
-#include "Components/ActorComponent.h"
+#include "GameFramework/Pawn.h"
+#include "Components/StaticMeshComponent.h"
+#include "Components/InputComponent.h"
+#include "GameFramework/FloatingPawnMovement.h"
 #include "OrbitVehicleController.generated.h"
 
 /**
- *  UOrbitVehicleController
- *
- *  A reusable component that manages the physics of a spaceship.
- *  It exposes thruster vectors (forward, right, up) and allows
- *  the user to apply throttle, yaw, pitch and roll.  The component
- *  automatically updates the ship's velocity and applies a simple
- *  drag model.
+ *  A futuristic spaceship controller that manages thruster vectors,
+ *  speed, acceleration, and rotation in a zero‑gravity environment.
  */
-UCLASS( ClassGroup=(Custom), meta=(BlueprintSpawnableComponent) )
-class ORBIT_API UOrbitVehicleController : public UActorComponent
+UCLASS()
+class ORBIT_API AOrbitVehicleController : public APawn
 {
 	GENERATED_BODY()
 
 public:
-	// ------------------------------------------------------------------
-	// Construction / Lifecycle
-	// ------------------------------------------------------------------
-	UOrbitVehicleController();
-
-	/** Called when the game starts */
-	virtual void BeginPlay() override;
+	AOrbitVehicleController();
 
 	/** Called every frame */
-	virtual void TickComponent(
-		float DeltaTime,
-		ELevelTick TickType,
-		FActorComponentTickFunction* ThisTickFunction) override;
+	virtual void Tick(float DeltaTime) override;
 
-	/** Request a shutdown of the controller (e.g. when the ship is destroyed) */
-	void RequestShutdown();
+	/** Setup player input bindings */
+	virtual void SetupPlayerInputComponent(UInputComponent* PlayerInputComponent) override;
 
-	// ------------------------------------------------------------------
-	// Public API – Input
-	// ------------------------------------------------------------------
-	/** Apply forward/backward throttle (-1.0 .. 1.0) */
-	UFUNCTION(BlueprintCallable, Category = "Orbit|Input")
-	void ApplyThrottle(float Throttle);
+	/** Returns the current speed (m/s) */
+	UFUNCTION(BlueprintCallable, Category = "Orbit|Movement")
+	float GetSpeed() const;
 
-	/** Apply yaw input (-1.0 .. 1.0) */
-	UFUNCTION(BlueprintCallable, Category = "Orbit|Input")
-	void ApplyYaw(float YawInput);
+	/** Returns the current velocity vector */
+	UFUNCTION(BlueprintCallable, Category = "Orbit|Movement")
+	FVector GetVelocity() const;
 
-	/** Apply pitch input (-1.0 .. 1.0) */
-	UFUNCTION(BlueprintCallable, Category = "Orbit|Input")
-	void ApplyPitch(float PitchInput);
-
-	/** Apply roll input (-1.0 .. 1.0) */
-	UFUNCTION(BlueprintCallable, Category = "Orbit|Input")
-	void ApplyRoll(float RollInput);
-
-	// ------------------------------------------------------------------
-	// Public API – Query
-	// ------------------------------------------------------------------
-	/** Current speed in units per second */
-	UFUNCTION(BlueprintCallable, Category = "Orbit|Query")
-	float GetCurrentSpeed() const { return CurrentSpeed; }
-
-	/** Current velocity vector in world space */
-	UFUNCTION(BlueprintCallable, Category = "Orbit|Query")
-	FVector GetVelocity() const { return Velocity; }
-
-	/** Current acceleration vector in world space */
-	UFUNCTION(BlueprintCallable, Category = "Orbit|Query")
-	FVector GetAcceleration() const { return Acceleration; }
-
-	/** Current orientation of the ship */
-	UFUNCTION(BlueprintCallable, Category = "Orbit|Query")
-	FRotator GetOrientation() const { return GetOwner()->GetActorRotation(); }
+protected:
+	/** Called when the game starts or when spawned */
+	virtual void BeginPlay() override;
 
 private:
-	// ------------------------------------------------------------------
-	// Internal state
-	// ------------------------------------------------------------------
-	/** Forward thruster vector (local space) */
-	UPROPERTY(EditAnywhere, Category = "Orbit|Thrusters")
-	FVector ThrusterForward = FVector::ForwardVector;
+	/** Static mesh representing the spaceship */
+	UPROPERTY(VisibleAnywhere, Category = "Orbit|Components")
+	UStaticMeshComponent* ShipMesh;
 
-	/** Right thruster vector (local space) */
-	UPROPERTY(EditAnywhere, Category = "Orbit|Thrusters")
-	FVector ThrusterRight = FVector::RightVector;
+	/** Movement component that handles physics simulation */
+	UPROPERTY(VisibleAnywhere, Category = "Orbit|Components")
+	UFloatingPawnMovement* MovementComponent;
 
-	/** Up thruster vector (local space) */
-	UPROPERTY(EditAnywhere, Category = "Orbit|Thrusters")
-	FVector ThrusterUp = FVector::UpVector;
+	/** Maximum linear speed (m/s) */
+	UPROPERTY(EditDefaultsOnly, Category = "Orbit|Movement")
+	float MaxSpeed = 2000.f;
 
-	/** Maximum speed (units per second) */
-	UPROPERTY(EditAnywhere, Category = "Orbit|Physics")
-	float MaxSpeed = 5000.0f;
+	/** Maximum angular speed (deg/s) */
+	UPROPERTY(EditDefaultsOnly, Category = "Orbit|Movement")
+	float MaxAngularSpeed = 180.f;
 
-	/** Maximum acceleration (units per second^2) */
-	UPROPERTY(EditAnywhere, Category = "Orbit|Physics")
-	float MaxAcceleration = 2000.0f;
+	/** Drag coefficient applied to linear velocity */
+	UPROPERTY(EditDefaultsOnly, Category = "Orbit|Movement")
+	float LinearDrag = 0.1f;
 
-	/** Drag coefficient (0 = no drag, 1 = full drag) */
-	UPROPERTY(EditAnywhere, Category = "Orbit|Physics")
-	float DragCoefficient = 0.05f;
+	/** Drag coefficient applied to angular velocity */
+	UPROPERTY(EditDefaultsOnly, Category = "Orbit|Movement")
+	float AngularDrag = 0.05f;
 
-	/** Current velocity in world space */
-	FVector Velocity = FVector::ZeroVector;
+	/** Thruster definition */
+	struct FThruster
+	{
+		/** Direction of the thrust relative to the ship (local space) */
+		FVector Direction;
 
-	/** Current acceleration in world space */
-	FVector Acceleration = FVector::ZeroVector;
+		/** Maximum force the thruster can apply (N) */
+		float MaxForce;
 
-	/** Current speed (magnitude of Velocity) */
-	float CurrentSpeed = 0.0f;
+		/** Current input value [-1, 1] */
+		float CurrentInput = 0.f;
+	};
 
-	/** Current throttle value (-1 .. 1) */
-	float CurrentThrottle = 0.0f;
+	/** Array of thrusters (e.g., forward, backward, left, right, up, down) */
+	UPROPERTY(EditDefaultsOnly, Category = "Orbit|Thrusters")
+	TArray<FThruster> Thrusters;
 
-	/** Current yaw input (-1 .. 1) */
-	float CurrentYaw = 0.0f;
+	/** Rotation input values [-1, 1] */
+	FVector2D RotationInput; // Pitch (X), Yaw (Y)
+	float RollInput = 0.f;
 
-	/** Current pitch input (-1 .. 1) */
-	float CurrentPitch = 0.0f;
+	/** Apply thruster forces based on current inputs */
+	void ApplyThrusters(float DeltaTime);
 
-	/** Current roll input (-1 .. 1) */
-	float CurrentRoll = 0.0f;
-
-	/** Helper to clamp a value between -1 and 1 */
-	float ClampInput(float Value) const { return FMath::Clamp(Value, -1.0f, 1.0f); }
-
-	/** Apply physics integration for the current frame */
-	void ApplyPhysics(float DeltaTime);
-
-	/** Apply rotation based on yaw/pitch/roll inputs */
+	/** Apply rotation based on input */
 	void ApplyRotation(float DeltaTime);
+
+	/** Clamp the ship's speed to MaxSpeed */
+	void ClampSpeed();
+
+	/** Input handlers */
+	void MoveForward(float Value);
+	void MoveRight(float Value);
+	void MoveUp(float Value);
+	void Pitch(float Value);
+	void Yaw(float Value);
+	void Roll(float Value);
 };
