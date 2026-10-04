@@ -3,14 +3,12 @@
 
 #include "CoreMinimal.h"
 #include "GameFramework/Pawn.h"
-#include "Components/StaticMeshComponent.h"
-#include "Components/InputComponent.h"
-#include "GameFramework/FloatingPawnMovement.h"
 #include "OrbitVehicleController.generated.h"
 
 /**
- *  A futuristic spaceship controller that manages thruster vectors,
- *  speed, acceleration, and rotation in a zero‑gravity environment.
+ *  A futuristic spaceship controller that manages thruster vectors and speed.
+ *  The controller exposes thruster force, maximum speed, and current velocity
+ *  to the editor and allows runtime manipulation via input or AI.
  */
 UCLASS()
 class ORBIT_API AOrbitVehicleController : public APawn
@@ -23,16 +21,24 @@ public:
 	/** Called every frame */
 	virtual void Tick(float DeltaTime) override;
 
-	/** Setup player input bindings */
-	virtual void SetupPlayerInputComponent(UInputComponent* PlayerInputComponent) override;
+	/** Called to bind functionality to input */
+	virtual void SetupPlayerInputComponent(class UInputComponent* PlayerInputComponent) override;
 
-	/** Returns the current speed (m/s) */
-	UFUNCTION(BlueprintCallable, Category = "Orbit|Movement")
-	float GetSpeed() const;
+	/** Apply a thrust impulse in the given direction */
+	UFUNCTION(BlueprintCallable, Category = "Thruster")
+	void ApplyThrust(const FVector& Direction, float Magnitude);
 
-	/** Returns the current velocity vector */
-	UFUNCTION(BlueprintCallable, Category = "Orbit|Movement")
-	FVector GetVelocity() const;
+	/** Set the current thruster direction (used for AI or scripted movement) */
+	UFUNCTION(BlueprintCallable, Category = "Thruster")
+	void SetThrusterDirection(const FVector& NewDirection);
+
+	/** Get the current velocity of the vehicle */
+	UFUNCTION(BlueprintPure, Category = "Thruster")
+	FVector GetCurrentVelocity() const { return CurrentVelocity; }
+
+	/** Get the current speed (magnitude of velocity) */
+	UFUNCTION(BlueprintPure, Category = "Thruster")
+	float GetCurrentSpeed() const { return CurrentVelocity.Size(); }
 
 protected:
 	/** Called when the game starts or when spawned */
@@ -40,64 +46,33 @@ protected:
 
 private:
 	/** Static mesh representing the spaceship */
-	UPROPERTY(VisibleAnywhere, Category = "Orbit|Components")
+	UPROPERTY(VisibleAnywhere, Category = "Components")
 	UStaticMeshComponent* ShipMesh;
 
-	/** Movement component that handles physics simulation */
-	UPROPERTY(VisibleAnywhere, Category = "Orbit|Components")
-	UFloatingPawnMovement* MovementComponent;
+	/** Current velocity of the spaceship */
+	FVector CurrentVelocity;
 
-	/** Maximum linear speed (m/s) */
-	UPROPERTY(EditDefaultsOnly, Category = "Orbit|Movement")
-	float MaxSpeed = 2000.f;
+	/** Current thruster direction (normalized) */
+	FVector ThrusterDirection;
 
-	/** Maximum angular speed (deg/s) */
-	UPROPERTY(EditDefaultsOnly, Category = "Orbit|Movement")
-	float MaxAngularSpeed = 180.f;
+	/** Force applied per second when thrusters are active */
+	UPROPERTY(EditAnywhere, Category = "Thruster")
+	float ThrusterForce = 5000.0f;
 
-	/** Drag coefficient applied to linear velocity */
-	UPROPERTY(EditDefaultsOnly, Category = "Orbit|Movement")
-	float LinearDrag = 0.1f;
+	/** Maximum speed the ship can reach */
+	UPROPERTY(EditAnywhere, Category = "Thruster")
+	float MaxSpeed = 3000.0f;
 
-	/** Drag coefficient applied to angular velocity */
-	UPROPERTY(EditDefaultsOnly, Category = "Orbit|Movement")
-	float AngularDrag = 0.05f;
+	/** Current throttle value (0.0 to 1.0) */
+	float Throttle = 0.0f;
 
-	/** Thruster definition */
-	struct FThruster
-	{
-		/** Direction of the thrust relative to the ship (local space) */
-		FVector Direction;
-
-		/** Maximum force the thruster can apply (N) */
-		float MaxForce;
-
-		/** Current input value [-1, 1] */
-		float CurrentInput = 0.f;
-	};
-
-	/** Array of thrusters (e.g., forward, backward, left, right, up, down) */
-	UPROPERTY(EditDefaultsOnly, Category = "Orbit|Thrusters")
-	TArray<FThruster> Thrusters;
-
-	/** Rotation input values [-1, 1] */
-	FVector2D RotationInput; // Pitch (X), Yaw (Y)
-	float RollInput = 0.f;
-
-	/** Apply thruster forces based on current inputs */
-	void ApplyThrusters(float DeltaTime);
-
-	/** Apply rotation based on input */
-	void ApplyRotation(float DeltaTime);
-
-	/** Clamp the ship's speed to MaxSpeed */
-	void ClampSpeed();
+	/** Helper to clamp velocity to MaxSpeed */
+	void ClampVelocity();
 
 	/** Input handlers */
 	void MoveForward(float Value);
 	void MoveRight(float Value);
 	void MoveUp(float Value);
-	void Pitch(float Value);
-	void Yaw(float Value);
-	void Roll(float Value);
+	void IncreaseThrottle();
+	void DecreaseThrottle();
 };
