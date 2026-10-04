@@ -1,173 +1,188 @@
 // OrbitVehicleController.cpp
-// 3‑D pitch / yaw / roll physics with gravity, drag and acceleration
-// -----------------------------------------------------------------
+// 3‑D pitch / yaw / roll physics with gravity, resistance and acceleration
+// -------------------------------------------------------------------------
 
 #include "OrbitVehicleController.h"
-#include "OrbitPhysicsSimulation.h"
-#include "OrbitTypes.h"
+#include "GameFramework/Actor.h"
+#include "GameFramework/PlayerController.h"
+#include "Components/PrimitiveComponent.h"
+#include "Engine/World.h"
+#include "DrawDebugHelpers.h"
 
-#include <cmath>
+//////////////////////////////////////////////////////////////////////////
+// Helper constants
+//////////////////////////////////////////////////////////////////////////
 
-namespace Orbit
+// Default physical constants
+static constexpr float DefaultGravity = 980.0f;          // cm/s²
+static constexpr float DefaultResistance = 0.1f;         // 10% per second
+static constexpr float DefaultAcceleration = 2000.0f;    // cm/s²
+static constexpr float MaxSpeed = 4000.0f;              // cm/s
+
+//////////////////////////////////////////////////////////////////////////
+// Constructor
+//////////////////////////////////////////////////////////////////////////
+
+AOrbitVehicleController::AOrbitVehicleController()
 {
-    // -----------------------------------------------------------------
-    // Helper constants
-    // -----------------------------------------------------------------
-    constexpr float GravityMagnitude = 9.81f;          // m/s²
-    constexpr float DragCoefficient  = 0.1f;           // simple linear drag
-    constexpr float MaxSpeed          = 200.0f;        // m/s
-    constexpr float TurnSpeed         = 90.0f;         // degrees per second
-    constexpr float AccelRate         = 50.0f;         // m/s²
+    PrimaryActorTick.bCanEverTick = true;
+    PrimaryActorTick.bStartWithTickEnabled = true;
 
-    // -----------------------------------------------------------------
-    // Constructor / Destructor
-    // -----------------------------------------------------------------
-    OrbitVehicleController::OrbitVehicleController()
-        : CurrentVelocity(FVector::ZeroVector)
-        , CurrentAngularVelocity(FVector::ZeroVector)
-        , CurrentRotation(FRotator::ZeroRotator)
-        , bIsAccelerating(false)
-        , bIsBraking(false)
+    // Create a simple root component that will be used for physics
+    RootComponent = CreateDefaultSubobject<USceneComponent>(TEXT("RootComponent"));
+    RootComponent->SetMobility(EComponentMobility::Movable);
+
+    // Enable physics simulation on the root component
+    RootComponent->SetSimulatePhysics(true);
+    RootComponent->SetEnableGravity(false); // We'll apply custom gravity
+
+    // Initialise state
+    CurrentVelocity = FVector::ZeroVector;
+    CurrentAngularVelocity = FVector::ZeroVector;
+    bIsAccelerating = false;
+}
+
+//////////////////////////////////////////////////////////////////////////
+// Input binding
+//////////////////////////////////////////////////////////////////////////
+
+void AOrbitVehicleController::SetupPlayerInputComponent(UInputComponent* PlayerInputComponent)
+{
+    Super::SetupPlayerInputComponent(PlayerInputComponent);
+
+    // Pitch / yaw / roll
+    PlayerInputComponent->BindAxis(TEXT("Pitch"), this, &AOrbitVehicleController::PitchInput);
+    PlayerInputComponent->BindAxis(TEXT("Yaw"), this, &AOrbitVehicleController::YawInput);
+    PlayerInputComponent->BindAxis(TEXT("Roll"), this, &AOrbitVehicleController::RollInput);
+
+    // Acceleration
+    PlayerInputComponent->BindAction(TEXT("Accelerate"), IE_Pressed, this, &AOrbitVehicleController::StartAccelerating);
+    PlayerInputComponent->BindAction(TEXT("Accelerate"), IE_Released, this, &AOrbitVehicleController::StopAccelerating);
+}
+
+//////////////////////////////////////////////////////////////////////////
+// Tick
+//////////////////////////////////////////////////////////////////////////
+
+void AOrbitVehicleController::Tick(float DeltaTime)
+{
+    Super::Tick(DeltaTime);
+
+    // 1. Apply custom gravity
+    ApplyGravity(DeltaTime);
+
+    // 2. Apply resistance (drag)
+    ApplyResistance(DeltaTime);
+
+    // 3. Apply acceleration if requested
+    if (bIsAccelerating)
     {
+        ApplyAcceleration(DeltaTime);
     }
 
-    OrbitVehicleController::~OrbitVehicleController()
+    // 4. Update orientation based on angular velocity
+    UpdateOrientation(DeltaTime);
+
+    // 5. Clamp speed
+    ClampSpeed();
+
+    // 6. Apply the updated velocity to the physics body
+    RootComponent->SetPhysicsLinearVelocity(CurrentVelocity, true);
+}
+
+//////////////////////////////////////////////////////////////////////////
+// Input handlers
+//////////////////////////////////////////////////////////////////////////
+
+void AOrbitVehicleController::PitchInput(float Value)
+{
+    // Positive pitch rotates nose up
+    CurrentAngularVelocity.X = FMath::Clamp(Value, -1.0f, 1.0f) * MaxAngularSpeed;
+}
+
+void AOrbitVehicleController::YawInput(float Value)
+{
+    // Positive yaw rotates right
+    CurrentAngularVelocity.Y = FMath::Clamp(Value, -1.0f, 1.0f) * MaxAngularSpeed;
+}
+
+void AOrbitVehicleController::RollInput(float Value)
+{
+    // Positive roll rotates clockwise
+    CurrentAngularVelocity.Z = FMath::Clamp(Value, -1.0f, 1.0f) * MaxAngularSpeed;
+}
+
+void AOrbitVehicleController::StartAccelerating()
+{
+    bIsAccelerating = true;
+}
+
+void AOrbitVehicleController::StopAccelerating()
+{
+    bIsAccelerating = false;
+}
+
+//////////////////////////////////////////////////////////////////////////
+// Physics helpers
+//////////////////////////////////////////////////////////////////////////
+
+void AOrbitVehicleController::ApplyGravity(float DeltaTime)
+{
+    // Custom gravity vector (downwards in world space)
+    const FVector GravityVector = FVector(0.0f, 0.0f, -DefaultGravity);
+    CurrentVelocity += GravityVector * DeltaTime;
+}
+
+void AOrbitVehicleController::ApplyResistance(float DeltaTime)
+{
+    // Simple linear drag: v = v * (1 - k * dt)
+    const float DragFactor = 1.0f - DefaultResistance * DeltaTime;
+    CurrentVelocity *= DragFactor;
+}
+
+void AOrbitVehicleController::ApplyAcceleration(float DeltaTime)
+{
+    // Accelerate in the forward direction of the actor
+    const FVector Forward = GetActorForwardVector();
+    CurrentVelocity += Forward * DefaultAcceleration * DeltaTime;
+}
+
+void AOrbitVehicleController::UpdateOrientation(float DeltaTime)
+{
+    // Convert angular velocity (deg/s) to a rotation delta
+    const FRotator DeltaRot = FRotator(
+        CurrentAngularVelocity.X * DeltaTime,
+        CurrentAngularVelocity.Y * DeltaTime,
+        CurrentAngularVelocity.Z * DeltaTime
+    );
+
+    // Apply rotation to the actor
+    AddActorLocalRotation(DeltaRot);
+}
+
+void AOrbitVehicleController::ClampSpeed()
+{
+    if (CurrentVelocity.Size() > MaxSpeed)
     {
+        CurrentVelocity = CurrentVelocity.GetSafeNormal() * MaxSpeed;
     }
+}
 
-    // -----------------------------------------------------------------
-    // Public API – called by the input system
-    // -----------------------------------------------------------------
-    void OrbitVehicleController::SetAccelerationInput(bool bAccelerate)
-    {
-        bIsAccelerating = bAccelerate;
-    }
+//////////////////////////////////////////////////////////////////////////
+// Debug helpers
+//////////////////////////////////////////////////////////////////////////
 
-    void OrbitVehicleController::SetBrakeInput(bool bBrake)
-    {
-        bIsBraking = bBrake;
-    }
+void AOrbitVehicleController::DrawDebugInfo()
+{
+    if (!RootComponent) return;
 
-    void OrbitVehicleController::SetPitchInput(float PitchDelta)
-    {
-        DesiredPitchDelta = PitchDelta;
-    }
+    // Draw velocity vector
+    const FVector Start = RootComponent->GetComponentLocation();
+    const FVector End = Start + CurrentVelocity * 0.1f; // scale for visibility
+    DrawDebugLine(GetWorld(), Start, End, FColor::Green, false, -1.0f, 0, 2.0f);
 
-    void OrbitVehicleController::SetYawInput(float YawDelta)
-    {
-        DesiredYawDelta = YawDelta;
-    }
-
-    void OrbitVehicleController::SetRollInput(float RollDelta)
-    {
-        DesiredRollDelta = RollDelta;
-    }
-
-    // -----------------------------------------------------------------
-    // Main physics update – called once per frame
-    // -----------------------------------------------------------------
-    void OrbitVehicleController::Update(double DeltaSeconds)
-    {
-        // 1. Handle linear acceleration / braking
-        HandleLinearMovement(DeltaSeconds);
-
-        // 2. Apply gravity (always downwards in world space)
-        ApplyGravity(DeltaSeconds);
-
-        // 3. Apply drag / resistance
-        ApplyDrag(DeltaSeconds);
-
-        // 4. Clamp speed
-        ClampSpeed();
-
-        // 5. Update position (not stored here – the owning actor would use CurrentVelocity)
-        //    Position update would be handled by the owning component / actor.
-
-        // 6. Handle angular motion (pitch / yaw / roll)
-        HandleAngularMovement(DeltaSeconds);
-    }
-
-    // -----------------------------------------------------------------
-    // Internal helpers
-    // -----------------------------------------------------------------
-    void OrbitVehicleController::HandleLinearMovement(double DeltaSeconds)
-    {
-        // Forward vector in world space
-        const FVector Forward = CurrentRotation.Vector();
-
-        // Acceleration vector
-        FVector Accel = FVector::ZeroVector;
-
-        if (bIsAccelerating)
-        {
-            Accel += Forward * AccelRate;
-        }
-
-        if (bIsBraking)
-        {
-            // Simple braking – apply opposite acceleration
-            Accel -= Forward * AccelRate;
-        }
-
-        // Update velocity
-        CurrentVelocity += Accel * static_cast<float>(DeltaSeconds);
-    }
-
-    void OrbitVehicleController::ApplyGravity(double DeltaSeconds)
-    {
-        // Gravity acts in negative Z direction in UE world space
-        const FVector Gravity = FVector(0.0f, 0.0f, -GravityMagnitude);
-        CurrentVelocity += Gravity * static_cast<float>(DeltaSeconds);
-    }
-
-    void OrbitVehicleController::ApplyDrag(double DeltaSeconds)
-    {
-        // Simple linear drag proportional to velocity
-        CurrentVelocity -= CurrentVelocity * DragCoefficient * static_cast<float>(DeltaSeconds);
-    }
-
-    void OrbitVehicleController::ClampSpeed()
-    {
-        const float SpeedSq = CurrentVelocity.SizeSquared();
-        if (SpeedSq > MaxSpeed * MaxSpeed)
-        {
-            CurrentVelocity = CurrentVelocity.GetSafeNormal() * MaxSpeed;
-        }
-    }
-
-    void OrbitVehicleController::HandleAngularMovement(double DeltaSeconds)
-    {
-        // Convert desired deltas to angular velocity
-        CurrentAngularVelocity.X = DesiredPitchDelta * TurnSpeed; // Pitch
-        CurrentAngularVelocity.Y = DesiredYawDelta   * TurnSpeed; // Yaw
-        CurrentAngularVelocity.Z = DesiredRollDelta  * TurnSpeed; // Roll
-
-        // Update rotation
-        FRotator DeltaRot = FRotator(
-            CurrentAngularVelocity.X * static_cast<float>(DeltaSeconds),
-            CurrentAngularVelocity.Y * static_cast<float>(DeltaSeconds),
-            CurrentAngularVelocity.Z * static_cast<float>(DeltaSeconds)
-        );
-
-        CurrentRotation += DeltaRot;
-        CurrentRotation.Normalize();
-
-        // Reset desired deltas after applying
-        DesiredPitchDelta = 0.0f;
-        DesiredYawDelta   = 0.0f;
-        DesiredRollDelta  = 0.0f;
-    }
-
-    // -----------------------------------------------------------------
-    // Accessors – used by the owning actor / component
-    // -----------------------------------------------------------------
-    const FVector& OrbitVehicleController::GetVelocity() const
-    {
-        return CurrentVelocity;
-    }
-
-    const FRotator& OrbitVehicleController::GetRotation() const
-    {
-        return CurrentRotation;
-    }
-} // namespace Orbit
+    // Draw angular velocity as a small arrow
+    const FVector AngStart = Start + FVector(0, 0, 50);
+    const FVector AngEnd = AngStart + CurrentAngularVelocity * 0.1f;
+    DrawDebugLine(GetWorld(), AngStart, AngEnd, FColor::Blue, false, -1.0f, 0, 2.0f);
+}
