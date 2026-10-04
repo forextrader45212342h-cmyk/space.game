@@ -6,51 +6,78 @@
 #include "OrbitSaveGame.generated.h"
 
 /**
- *  Stores persistent game data such as fuel, score, ship coordinates and unlocked ships.
- *  This class is intended to be used with the UE5 SaveGame system.
+ *  UOrbitSaveGame
+ *  ----------------
+ *  A simple save game class that stores the player's fuel, score,
+ *  current coordinates, and a list of unlocked ships.
+ *
+ *  All properties are exposed to the editor and Blueprints so they
+ *  can be inspected or modified during gameplay.  The class also
+ *  provides static helpers for loading and saving the game data.
  */
-UCLASS(BlueprintType, Category = "Orbit|Save")
+UCLASS()
 class ORBIT_API UOrbitSaveGame : public USaveGame
 {
-    GENERATED_BODY()
+	GENERATED_BODY()
 
 public:
-    /** Default constructor */
-    UOrbitSaveGame()
-        : Fuel(0)
-        , Score(0)
-    {}
+	/** Default constructor */
+	UOrbitSaveGame()
+		: Fuel(0)
+		, Score(0)
+		, Coordinates(FVector::ZeroVector)
+	{
+	}
 
-    /** Current fuel level */
-    UPROPERTY(BlueprintReadWrite, Category = "Orbit|Save")
-    int32 Fuel;
+	/** Current fuel level */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Orbit|Save")
+	int32 Fuel;
 
-    /** Current score */
-    UPROPERTY(BlueprintReadWrite, Category = "Orbit|Save")
-    int32 Score;
+	/** Current score */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Orbit|Save")
+	int32 Score;
 
-    /** Positions of all ships that have been spawned or visited */
-    UPROPERTY(BlueprintReadWrite, Category = "Orbit|Save")
-    TArray<FVector> ShipCoordinates;
+	/** Current world coordinates of the player */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Orbit|Save")
+	FVector Coordinates;
 
-    /** Names of ships that have been unlocked by the player */
-    UPROPERTY(BlueprintReadWrite, Category = "Orbit|Save")
-    TArray<FName> UnlockedShips;
+	/** List of ship identifiers that have been unlocked */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Orbit|Save")
+	TArray<FString> UnlockedShips;
 
-    /** Helper to add a new ship coordinate */
-    UFUNCTION(BlueprintCallable, Category = "Orbit|Save")
-    void AddShipCoordinate(const FVector& NewCoord)
-    {
-        ShipCoordinates.Add(NewCoord);
-    }
+	/**
+	 *  Load a save game from the default slot.
+	 *
+	 *  @param SlotName  The name of the save slot (default: "OrbitSaveSlot").
+	 *  @param UserIndex The user index (default: 0).
+	 *  @return The loaded UOrbitSaveGame instance, or nullptr if loading failed.
+	 */
+	static UOrbitSaveGame* LoadGame(const FString& SlotName = TEXT("OrbitSaveSlot"),
+	                                const int32 UserIndex = 0)
+	{
+		if (UGameplayStatics::DoesSaveGameExist(SlotName, UserIndex))
+		{
+			return Cast<UOrbitSaveGame>(UGameplayStatics::LoadGameFromSlot(SlotName, UserIndex));
+		}
+		return nullptr;
+	}
 
-    /** Helper to unlock a new ship */
-    UFUNCTION(BlueprintCallable, Category = "Orbit|Save")
-    void UnlockShip(const FName& ShipName)
-    {
-        if (!UnlockedShips.Contains(ShipName))
-        {
-            UnlockedShips.Add(ShipName);
-        }
-    }
+	/**
+	 *  Save a UOrbitSaveGame instance to the default slot.
+	 *
+	 *  @param SaveGame  The instance to save.
+	 *  @param SlotName  The name of the save slot (default: "OrbitSaveSlot").
+	 *  @param UserIndex The user index (default: 0).
+	 *  @return true if the save succeeded, false otherwise.
+	 */
+	static bool SaveGame(UOrbitSaveGame* SaveGame,
+	                     const FString& SlotName = TEXT("OrbitSaveSlot"),
+	                     const int32 UserIndex = 0)
+	{
+		if (!SaveGame)
+		{
+			return false;
+		}
+		return UGameplayStatics::SaveGameToSlot(SaveGame, SlotName, UserIndex);
+	}
 };
