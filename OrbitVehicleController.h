@@ -2,91 +2,69 @@
 #pragma once
 
 #include "CoreMinimal.h"
-#include "Components/ActorComponent.h"
+#include "GameFramework/Pawn.h"
 #include "OrbitVehicleController.generated.h"
 
 /**
- *  OrbitVehicleController
- *  -----------------------
- *  A UE5 component that manages a futuristic spaceship's flight system.
- *  It handles multiple thruster vectors, acceleration, speed limits, and
- *  provides a simple API for applying thrust in arbitrary directions.
- *
- *  The component is ticked every frame and updates the owning actor's
- *  velocity accordingly.  It exposes properties that can be edited in
- *  the editor or overridden in Blueprints.
+ *  A futuristic spaceship controller that uses a set of thruster vectors
+ *  to compute the ship's velocity and orientation.  The controller
+ *  exposes a simple API for applying thrust in any of the defined
+ *  directions and automatically clamps the speed to a configurable
+ *  maximum.
  */
-UCLASS( ClassGroup=(Custom), meta=(BlueprintSpawnableComponent) )
-class ORBIT_API UOrbitVehicleController : public UActorComponent
+UCLASS()
+class ORBIT_API AOrbitVehicleController : public APawn
 {
 	GENERATED_BODY()
 
 public:
-	/** Constructor */
-	UOrbitVehicleController();
+	AOrbitVehicleController();
 
 	/** Called every frame */
-	virtual void TickComponent(
-		float DeltaTime,
-		ELevelTick TickType,
-		FActorComponentTickFunction* ThisTickFunction) override;
+	virtual void Tick(float DeltaTime) override;
 
-	/** Apply thrust in a given direction.  Amount is a scalar multiplier (0..1). */
-	UFUNCTION(BlueprintCallable, Category="Orbit|Thrusters")
-	void ApplyThrust(const FVector& Direction, float Amount = 1.0f);
+	/** Setup player input bindings */
+	virtual void SetupPlayerInputComponent(class UInputComponent* PlayerInputComponent) override;
 
-	/** Set the maximum speed of the vehicle (units per second). */
-	UFUNCTION(BlueprintCallable, Category="Orbit|Movement")
-	void SetMaxSpeed(float NewMaxSpeed);
+	/** Apply thrust in the specified direction index (0..ThrusterVectors.Num()-1) */
+	UFUNCTION(BlueprintCallable, Category = "Thrusters")
+	void ApplyThruster(int32 DirectionIndex, float ThrustMagnitude);
 
-	/** Get the current speed of the vehicle. */
-	UFUNCTION(BlueprintPure, Category="Orbit|Movement")
-	float GetCurrentSpeed() const { return CurrentSpeed; }
+	/** Returns the current velocity of the ship */
+	UFUNCTION(BlueprintPure, Category = "Thrusters")
+	FVector GetVelocity() const { return CurrentVelocity; }
 
-	/** Called when the speed changes significantly (e.g. > 5% change). */
-	UPROPERTY(BlueprintAssignable, Category="Orbit|Events")
-	FOnSpeedChangedSignature OnSpeedChanged;
+	/** Returns the current speed (magnitude of velocity) */
+	UFUNCTION(BlueprintPure, Category = "Thrusters")
+	float GetSpeed() const { return CurrentVelocity.Size(); }
 
 protected:
-	/** Called when the component is initialized */
+	/** Called when the game starts or when spawned */
 	virtual void BeginPlay() override;
 
 private:
-	/** Current velocity of the vehicle in world space */
-	FVector CurrentVelocity = FVector::ZeroVector;
+	/** Static mesh representing the ship */
+	UPROPERTY(VisibleAnywhere, Category = "Components")
+	UStaticMeshComponent* ShipMesh;
 
-	/** Current speed magnitude (units per second) */
-	float CurrentSpeed = 0.0f;
-
-	/** Maximum allowed speed */
-	UPROPERTY(EditAnywhere, Category="Orbit|Movement")
-	float MaxSpeed = 3000.0f; // units/s
-
-	/** Acceleration per second when full thrust is applied */
-	UPROPERTY(EditAnywhere, Category="Orbit|Movement")
-	float Acceleration = 1500.0f; // units/s^2
-
-	/** Deceleration when no thrust is applied (drag) */
-	UPROPERTY(EditAnywhere, Category="Orbit|Movement")
-	float Deceleration = 800.0f; // units/s^2
-
-	/** List of active thruster vectors relative to the actor */
-	UPROPERTY(EditAnywhere, Category="Orbit|Thrusters")
+	/** Array of thruster direction vectors in local space */
+	UPROPERTY(EditAnywhere, Category = "Thrusters")
 	TArray<FVector> ThrusterVectors;
 
-	/** Helper to clamp speed and update CurrentVelocity */
-	void UpdateVelocity(float DeltaTime);
+	/** Acceleration per unit thrust (m/s^2) */
+	UPROPERTY(EditAnywhere, Category = "Thrusters")
+	float AccelerationPerThrust = 200.0f;
 
-	/** Helper to broadcast speed change if needed */
-	void BroadcastSpeedChange();
+	/** Maximum speed the ship can reach (m/s) */
+	UPROPERTY(EditAnywhere, Category = "Thrusters")
+	float MaxSpeed = 1200.0f;
 
-	/** Threshold for broadcasting speed changes (percentage of MaxSpeed) */
-	UPROPERTY(EditDefaultsOnly, Category="Orbit|Events")
-	float SpeedChangeThreshold = 0.05f; // 5%
+	/** Current velocity in world space */
+	FVector CurrentVelocity;
 
-	/** Last broadcasted speed for comparison */
-	float LastBroadcastedSpeed = 0.0f;
+	/** Helper to clamp velocity to MaxSpeed */
+	void ClampSpeed();
+
+	/** Helper to convert local thruster vector to world space */
+	FVector GetWorldThrusterVector(int32 Index) const;
 };
-
-/** Delegate for speed change events */
-DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FOnSpeedChangedSignature, float, NewSpeed);
