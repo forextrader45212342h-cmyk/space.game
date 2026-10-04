@@ -3,113 +3,73 @@
 
 #include "CoreMinimal.h"
 #include "Components/ActorComponent.h"
-#include "GameFramework/Actor.h"
 #include "TimerManager.h"
-#include "Kismet/GameplayStatics.h"
 #include "Engine/World.h"
 #include "DrawDebugHelpers.h"
 #include "OrbitWeaponSystem.generated.h"
 
 /**
- *  UOrbitWeaponSystem
- *  ------------------
- *  A reusable component that handles laser‑style ray‑cast weapons
- *  as well as projectile‑based weapons.  It supports:
- *      • Ray‑cast laser hit detection
- *      • Projectile spawning with optional damage
- *      • Cool‑down timer between shots
- *      • Configurable damage, range, trace channel, and visual effects
+ *  UOrbitWeaponSystemComponent
+ *
+ *  A lightweight weapon system that:
+ *  - Performs a raycast (laser) to detect hits.
+ *  - Spawns a projectile actor at the muzzle.
+ *  - Enforces a cooldown between shots.
  *
  *  The component is intended to be attached to any Actor that
- *  should be able to fire a weapon (e.g. a player pawn or an AI
- *  turret).  All properties are exposed to Blueprints for easy
- *  tuning.
+ *  should be able to fire a weapon (e.g. a spaceship, a turret, etc.).
  */
 UCLASS( ClassGroup=(Custom), meta=(BlueprintSpawnableComponent) )
-class ORBIT_API UOrbitWeaponSystem : public UActorComponent
+class ORBIT_API UOrbitWeaponSystemComponent : public UActorComponent
 {
 	GENERATED_BODY()
 
 public:
-	UOrbitWeaponSystem();
+	UOrbitWeaponSystemComponent();
 
 	/** Fire the weapon.  Returns true if a shot was fired. */
-	UFUNCTION(BlueprintCallable, Category="Weapon")
+	UFUNCTION(BlueprintCallable, Category = "Weapon")
 	bool FireWeapon();
+
+	/** Set the projectile class to spawn. */
+	void SetProjectileClass(TSubclassOf<AActor> InClass) { ProjectileClass = InClass; }
+
+	/** Set the muzzle socket name. */
+	void SetMuzzleSocketName(FName InSocketName) { MuzzleSocketName = InSocketName; }
+
+	/** Set the cooldown time in seconds. */
+	void SetCooldown(float InCooldown) { CooldownTime = InCooldown; }
 
 protected:
 	virtual void BeginPlay() override;
 
 private:
-	/** Perform a ray‑cast from the muzzle and apply damage if hit. */
-	void PerformRaycast();
+	/** Performs the raycast and returns the hit result. */
+	bool PerformRaycast(FHitResult& OutHit);
 
-	/** Spawn a projectile actor at the muzzle location. */
-	void SpawnProjectile();
+	/** Spawns the projectile at the muzzle. */
+	void SpawnProjectile(const FVector& SpawnLocation, const FRotator& SpawnRotation);
 
-	/** Start the cooldown timer. */
-	void StartCooldown();
-
-	/** Reset the ability to fire. */
-	void ResetCooldown();
-
-	/** Apply damage to the hit actor. */
-	void ApplyDamage(const FHitResult& Hit);
-
-	/** Helper to get the world location of the muzzle. */
-	FVector GetMuzzleLocation() const;
-
-	/** Helper to get the world rotation of the muzzle. */
-	FRotator GetMuzzleRotation() const;
+	/** Resets the ability to fire after cooldown. */
+	void ResetFire();
 
 private:
-	/** The class of the projectile to spawn.  If null, no projectile is spawned. */
-	UPROPERTY(EditAnywhere, Category="Weapon|Projectile")
+	/** Class of the projectile to spawn. */
+	UPROPERTY(EditDefaultsOnly, Category = "Weapon")
 	TSubclassOf<AActor> ProjectileClass;
 
-	/** Optional particle system to spawn as a laser beam. */
-	UPROPERTY(EditAnywhere, Category="Weapon|Laser")
-	UParticleSystem* LaserBeamEffect;
+	/** Name of the socket on the owning actor that represents the muzzle. */
+	UPROPERTY(EditDefaultsOnly, Category = "Weapon")
+	FName MuzzleSocketName = FName(TEXT("Muzzle"));
 
-	/** Damage applied to the hit actor. */
-	UPROPERTY(EditAnywhere, Category="Weapon|Damage")
-	float Damage = 25.f;
+	/** Distance of the laser raycast. */
+	UPROPERTY(EditDefaultsOnly, Category = "Weapon")
+	float RaycastDistance = 10000.0f;
 
-	/** Maximum range of the ray‑cast. */
-	UPROPERTY(EditAnywhere, Category="Weapon|Range")
-	float Range = 10000.f;
-
-	/** Cool‑down time between shots in seconds. */
-	UPROPERTY(EditAnywhere, Category="Weapon|Cooldown")
+	/** Time in seconds between shots. */
+	UPROPERTY(EditDefaultsOnly, Category = "Weapon")
 	float CooldownTime = 0.5f;
-
-	/** Collision channel used for the ray‑cast. */
-	UPROPERTY(EditAnywhere, Category="Weapon|Trace")
-	TEnumAsByte<ECollisionChannel> TraceChannel = ECC_Visibility;
-
-	/** Offset from the muzzle component along its forward axis. */
-	UPROPERTY(EditAnywhere, Category="Weapon|Muzzle")
-	float MuzzleOffset = 100.f;
 
 	/** Whether the weapon can currently fire. */
 	bool bCanFire = true;
-
-	/** Timer handle for the cooldown. */
-	FTimerHandle CooldownTimerHandle;
-
-	/** Optional muzzle component.  If not set, the owner actor's root is used. */
-	UPROPERTY(EditAnywhere, Category="Weapon|Muzzle")
-	USceneComponent* MuzzleComponent;
-
-	/** Whether to spawn a projectile in addition to the ray‑cast. */
-	UPROPERTY(EditAnywhere, Category="Weapon|Projectile")
-	bool bSpawnProjectile = true;
-
-	/** Whether to spawn a laser beam effect. */
-	UPROPERTY(EditAnywhere, Category="Weapon|Laser")
-	bool bSpawnLaserBeam = true;
-
-	/** Whether to apply damage when the ray‑cast hits. */
-	UPROPERTY(EditAnywhere, Category="Weapon|Damage")
-	bool bApplyDamageOnHit = true;
 };
