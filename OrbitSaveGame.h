@@ -6,21 +6,19 @@
 #include "OrbitSaveGame.generated.h"
 
 /**
- *  UOrbitSaveGame
+ *  Simple save game class that stores the player's fuel, score, current
+ *  world coordinates and the list of ships that have been unlocked.
  *
- *  A simple SaveGame subclass that stores the player's
- *  fuel level, score, current coordinates and a list of
- *  unlocked ships.  All properties are exposed to Blueprints
- *  so they can be read or modified from the editor or
- *  gameplay scripts.
+ *  All properties are marked with UPROPERTY so that the engine can
+ *  automatically serialize them when the game is saved or loaded.
  */
-UCLASS(BlueprintType, Category = "Orbit")
-class ORBIT_API UOrbitSaveGame : public USaveGame
+UCLASS(BlueprintType, MinimalAPI)
+class UOrbitSaveGame : public USaveGame
 {
 	GENERATED_BODY()
 
 public:
-	/** Default constructor – initialise members to safe defaults. */
+	/** Default constructor – initialise with sensible defaults. */
 	UOrbitSaveGame()
 		: Fuel(0.f)
 		, Score(0)
@@ -28,19 +26,19 @@ public:
 	{
 	}
 
-	/** Current fuel level of the player. */
-	UPROPERTY(BlueprintReadWrite, Category = "Orbit|Player")
+	/** Current amount of fuel the player has. */
+	UPROPERTY(VisibleAnywhere, Category = "SaveData")
 	float Fuel;
 
-	/** Current score of the player. */
-	UPROPERTY(BlueprintReadWrite, Category = "Orbit|Player")
+	/** Total score accumulated by the player. */
+	UPROPERTY(VisibleAnywhere, Category = "SaveData")
 	int32 Score;
 
-	/** Current world coordinates of the player. */
-	UPROPERTY(BlueprintReadWrite, Category = "Orbit|Player")
+	/** Player's current world position. */
+	UPROPERTY(VisibleAnywhere, Category = "SaveData")
 	FVector Coordinates;
 
 	/** List of ship identifiers that the player has unlocked. */
-	UPROPERTY(BlueprintReadWrite, Category = "Orbit|Player")
+	UPROPERTY(VisibleAnywhere, Category = "SaveData")
 	TArray<FString> UnlockedShips;
 };
