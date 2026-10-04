@@ -1,186 +1,204 @@
 // OrbitWeaponSystem.cpp
-// Implements laser firing, line‑tracing, damage application and telemetry logging.
+// Implements a laser weapon that performs a line‑trace, applies damage,
+// and records telemetry data for later analysis.
 
 #include "OrbitWeaponSystem.h"
+
 #include "GameFramework/Actor.h"
-#include "Engine/World.h"
-#include "DrawDebugHelpers.h"
 #include "Kismet/GameplayStatics.h"
-#include "Engine/Engine.h"
+#include "DrawDebugHelpers.h"
+#include "Engine/World.h"
 #include "TimerManager.h"
 
-DEFINE_LOG_CATEGORY_STATIC(LogOrbitWeapon, Log, All);
+//////////////////////////////////////////////////////////////////////////
+// UOrbitWeaponSystem
 
-// -----------------------------------------------------------------------------
-// Helper: Telemetry data structure
-// -----------------------------------------------------------------------------
-struct FLaserTelemetry
-{
-    FVector Start;
-    FVector End;
-    bool bHit;
-    AActor* HitActor;
-    float HitDistance;
-    float DamageDealt;
-    double Timestamp;
-
-    FLaserTelemetry()
-        : Start(FVector::ZeroVector)
-        , End(FVector::ZeroVector)
-        , bHit(false)
-        , HitActor(nullptr)
-        , HitDistance(0.f)
-        , DamageDealt(0.f)
-        , Timestamp(0.0)
-    {}
-};
-
-// -----------------------------------------------------------------------------
-// OrbitWeaponSystem implementation
-// -----------------------------------------------------------------------------
 UOrbitWeaponSystem::UOrbitWeaponSystem()
 {
+    // Enable ticking if you want to flush telemetry periodically
     PrimaryComponentTick.bCanEverTick = false;
-    Damage = 25.f;
-    TraceRange = 10000.f;
-    bDebugDraw = true;
 }
 
 void UOrbitWeaponSystem::BeginPlay()
 {
     Super::BeginPlay();
 
-    // Optional: schedule periodic telemetry dump
+    // Optional: start a timer to flush telemetry every few seconds
     GetWorld()->GetTimerManager().SetTimer(
-        TelemetryTimerHandle,
+        TelemetryFlushTimer,
         this,
-        &UOrbitWeaponSystem::DumpTelemetry,
-        TelemetryInterval,
+        &UOrbitWeaponSystem::FlushTelemetry,
+        TelemetryFlushInterval,
         true
     );
 }
 
-void UOrbitWeaponSystem::FireLaser()
+//////////////////////////////////////////////////////////////////////////
+// Public API
+
+/**
+ * Fires a laser from the given start point in the given direction.
+ *
+ * @param Start          World space start location of the laser.
+ * @param Direction      Normalized direction vector.
+ * @param Range          Maximum trace distance.
+ * @param Damage         Damage to apply on hit.
+ */
+void UOrbitWeaponSystem::FireLaser(
+    const FVector& Start,
+    const FVector& Direction,
+    float Range,
+    float Damage)
 {
-    if (!GetOwner())
+    if (!GetWorld())
     {
-        UE_LOG(LogOrbitWeapon, Warning, TEXT("OrbitWeaponSystem has no owner!"));
         return;
     }
 
-    const FVector Start = GetOwner()->GetActorLocation();
-    const FRotator Rotation = GetOwner()->GetActorRotation();
-    const FVector Direction = Rotation.Vector();
+    // Draw a debug line for visual feedback
+    const FVector End = Start + Direction * Range;
+    DrawDebugLine(
+        GetWorld(),
+        Start,
+        End,
+        FColor::Red,
+        false,
+        1.0f,
+        0,
+        1.0f
+    );
 
-    const FVector End = Start + Direction * TraceRange;
-
-    FLaserTelemetry Telemetry;
-    Telemetry.Start = Start;
-    Telemetry.End = End;
-    Telemetry.Timestamp = FPlatformTime::Seconds();
-
+    // Perform the line trace
     FHitResult HitResult;
-    FCollisionQueryParams Params;
-    Params.AddIgnoredActor(GetOwner());
-    Params.bTraceComplex = true;
-    Params.bReturnPhysicalMaterial = false;
+    if (PerformLineTrace(Start, End, HitResult))
+    {
+        // Apply damage to the hit actor
+        ApplyDamage(HitResult, Damage);
 
-    const bool bHit = GetWorld()->LineTraceSingleByChannel(
+        // Record telemetry
+        RecordTelemetry(HitResult, Damage);
+    }
+}
+
+//////////////////////////////////////////////////////////////////////////
+// Internal helpers
+
+/**
+ * Performs a single channel line trace.
+ *
+ * @param Start      Trace start location.
+ * @param End        Trace end location.
+ * @param HitResult  Out hit result.
+ * @return           true if something was hit.
+ */
+bool UOrbitWeaponSystem::PerformLineTrace(
+    const FVector& Start,
+    const FVector& End,
+    FHitResult& HitResult) const
+{
+    FCollisionQueryParams QueryParams;
+    QueryParams.bTraceComplex = true;
+    QueryParams.AddIgnoredActor(GetOwner());
+
+    return GetWorld()->LineTraceSingleByChannel(
         HitResult,
         Start,
         End,
         ECC_Visibility,
-        Params
+        QueryParams
     );
-
-    Telemetry.bHit = bHit;
-    Telemetry.HitActor = bHit ? HitResult.GetActor() : nullptr;
-    Telemetry.HitDistance = bHit ? HitResult.Distance : 0.f;
-
-    if (bHit && Telemetry.HitActor)
-    {
-        // Apply damage
-        const float AppliedDamage = UGameplayStatics::ApplyDamage(
-            Telemetry.HitActor,
-            Damage,
-            GetOwner()->GetInstigatorController(),
-            GetOwner(),
-            UDamageType::StaticClass()
-        );
-
-        Telemetry.DamageDealt = AppliedDamage;
-
-        UE_LOG(LogOrbitWeapon, Log,
-            TEXT("Laser hit %s for %f damage (Distance: %f)"),
-            *Telemetry.HitActor->GetName(),
-            AppliedDamage,
-            Telemetry.HitDistance
-        );
-    }
-    else
-    {
-        UE_LOG(LogOrbitWeapon, Log,
-            TEXT("Laser missed. Trace end: %s"),
-            *End.ToString()
-        );
-    }
-
-    // Store telemetry for later analysis
-    TelemetryHistory.Add(Telemetry);
-
-    // Optional debug drawing
-    if (bDebugDraw)
-    {
-        const FColor LineColor = bHit ? FColor::Red : FColor::Green;
-        DrawDebugLine(
-            GetWorld(),
-            Start,
-            End,
-            LineColor,
-            false,
-            2.f,
-            0,
-            1.f
-        );
-
-        if (bHit)
-        {
-            DrawDebugPoint(
-                GetWorld(),
-                HitResult.ImpactPoint,
-                10.f,
-                FColor::Yellow,
-                false,
-                2.f
-            );
-        }
-    }
 }
 
-void UOrbitWeaponSystem::DumpTelemetry()
+/**
+ * Applies point damage to the hit actor.
+ *
+ * @param HitResult  Result from the line trace.
+ * @param Damage     Amount of damage to apply.
+ */
+void UOrbitWeaponSystem::ApplyDamage(
+    const FHitResult& HitResult,
+    float Damage) const
 {
-    if (TelemetryHistory.Num() == 0)
+    if (!HitResult.GetActor())
     {
-        UE_LOG(LogOrbitWeapon, Verbose, TEXT("No telemetry to dump."));
         return;
     }
 
-    UE_LOG(LogOrbitWeapon, Log, TEXT("=== Laser Telemetry Dump (%d entries) ==="),
-        TelemetryHistory.Num());
+    UGameplayStatics::ApplyPointDamage(
+        HitResult.GetActor(),
+        Damage,
+        HitResult.TraceStart - HitResult.TraceEnd, // direction
+        HitResult,
+        GetOwner()->GetInstigatorController(),
+        GetOwner(),
+        DamageType
+    );
+}
 
-    for (const FLaserTelemetry& Entry : TelemetryHistory)
+/**
+ * Stores telemetry data for later analysis.
+ *
+ * @param HitResult  Result from the line trace.
+ * @param Damage     Damage that was applied.
+ */
+void UOrbitWeaponSystem::RecordTelemetry(
+    const FHitResult& HitResult,
+    float Damage)
+{
+    FWeaponTelemetry Telemetry;
+    Telemetry.HitLocation = HitResult.ImpactPoint;
+    Telemetry.HitActor = HitResult.GetActor();
+    Telemetry.DamageDealt = Damage;
+    Telemetry.Timestamp = GetWorld()->GetTimeSeconds();
+
+    TelemetryLog.Add(Telemetry);
+}
+
+/**
+ * Flushes the telemetry buffer to disk or a network endpoint.
+ * This is a placeholder – replace with your own persistence logic.
+ */
+void UOrbitWeaponSystem::FlushTelemetry()
+{
+    if (TelemetryLog.Num() == 0)
     {
-        UE_LOG(LogOrbitWeapon, Log,
-            TEXT("[%.3f] Start: %s | End: %s | Hit: %s | Actor: %s | Dist: %.1f | Damage: %.1f"),
-            Entry.Timestamp,
-            *Entry.Start.ToString(),
-            *Entry.End.ToString(),
-            Entry.bHit ? TEXT("Yes") : TEXT("No"),
-            Entry.HitActor ? *Entry.HitActor->GetName() : TEXT("None"),
-            Entry.HitDistance,
-            Entry.DamageDealt
+        return;
+    }
+
+    // Example: log to the console
+    for (const FWeaponTelemetry& Telemetry : TelemetryLog)
+    {
+        UE_LOG(
+            LogTemp,
+            Log,
+            TEXT("Laser hit %s at %s, damage: %.2f"),
+            Telemetry.HitActor ? *Telemetry.HitActor->GetName() : TEXT("None"),
+            *Telemetry.HitLocation.ToString(),
+            Telemetry.DamageDealt
         );
     }
 
-    TelemetryHistory.Empty();
+    TelemetryLog.Empty();
 }
+
+//////////////////////////////////////////////////////////////////////////
+// Telemetry struct definition (usually in the header)
+
+#if WITH_EDITOR
+// Only compile this in editor builds to keep shipping builds lean.
+void UOrbitWeaponSystem::PrintTelemetry() const
+{
+    for (const FWeaponTelemetry& Telemetry : TelemetryLog)
+    {
+        UE_LOG(
+            LogTemp,
+            Warning,
+            TEXT("Telemetry: Actor=%s, Location=%s, Damage=%.2f, Time=%.2f"),
+            Telemetry.HitActor ? *Telemetry.HitActor->GetName() : TEXT("None"),
+            *Telemetry.HitLocation.ToString(),
+            Telemetry.DamageDealt,
+            Telemetry.Timestamp
+        );
+    }
+}
+#endif
