@@ -1,19 +1,20 @@
 // OrbitSaveGame.cpp
 // ---------------
-// Implements a minimal UE5 save‑game system that serialises the
-// current game state to a binary .sav file and can restore it later.
+// Implements binary serialization of the Orbit game state.
+// The save format is a simple binary blob written to
+// <ProjectSavedDir>/OrbitGame.sav.  The format is
+// intentionally minimal – it contains only the data that
+// is required to restore the game to a consistent state
+// after a restart.
 //
-// The implementation follows UE5 conventions:
-//   • A USaveGame subclass (UOrbitSaveGame) that holds the data.
-//   • Custom binary serialisation via FArchive.
-//   • File I/O through FFileHelper / IFileManager.
-//   • The file is stored in the project’s Saved directory with a
-//     ".sav" extension.
-//
-// The code is intentionally lightweight – it can be expanded to
-// include any additional state you need to persist.
+// The implementation uses UE5's FArchive system so that
+// the same code works on all supported platforms
+// (Windows, Linux, macOS, consoles, etc.).
 
 #include "OrbitSaveGame.h"
+#include "OrbitTypes.h"
+#include "OrbitPhysicsSimulation.h"
+#include "OrbitRenderCore.h"
 
 #include "Misc/FileHelper.h"
 #include "Misc/Paths.h"
@@ -21,54 +22,165 @@
 #include "Serialization/BufferArchive.h"
 #include "Serialization/MemoryReader.h"
 
-UOrbitSaveGame::UOrbitSaveGame()
+namespace Orbit
 {
-    // Default constructor – UE will initialise properties automatically.
-}
-
-void UOrbitSaveGame::Serialize(FArchive& Ar)
-{
-    // Let the base class handle its own data first.
-    Super::Serialize(Ar);
-
-    // Serialize the game‑specific data.
-    Ar << PlayerPosition;
-    Ar << PlayerRotation;
-    Ar << Inventory;
-    Ar << CurrentLevelName;
-    Ar << bIsGamePaused;
-}
-
-bool UOrbitSaveGame::SaveToFile(const FString& SlotName) const
-{
-    // Convert the UOrbitSaveGame object into a binary buffer.
-    FBufferArchive ToBinary;
-    ToBinary << *this;
-
-    // Build the full path: <Project>/Saved/<SlotName>.sav
-    const FString FilePath = FPaths::ProjectSavedDir() / (SlotName + TEXT(".sav"));
-
-    // Write the buffer to disk.
-    return FFileHelper::SaveArrayToFile(ToBinary, *FilePath);
-}
-
-bool UOrbitSaveGame::LoadFromFile(const FString& SlotName)
-{
-    // Build the full path: <Project>/Saved/<SlotName>.sav
-    const FString FilePath = FPaths::ProjectSavedDir() / (SlotName + TEXT(".sav"));
-
-    // Load the file into a byte array.
-    TArray<uint8> BinaryArray;
-    if (!FFileHelper::LoadFileToArray(BinaryArray, *FilePath))
+    // ------------------------------------------------------------------
+    // Helper: Convert a string to a platform‑independent path.
+    // ------------------------------------------------------------------
+    static FString GetSaveFilePath()
     {
-        UE_LOG(LogTemp, Warning, TEXT("Failed to load save file: %s"), *FilePath);
-        return false;
+        // All saves go into the project's Saved directory.
+        return FPaths::Combine(
+            FPaths::ProjectSavedDir(),
+            TEXT("OrbitGame.sav")
+        );
     }
 
-    // Deserialize the byte array back into this object.
-    FMemoryReader FromBinary = FMemoryReader(BinaryArray, true);
-    FromBinary.Seek(0);
-    FromBinary << *this;
+    // ------------------------------------------------------------------
+    // Serialize the entire game state into a binary buffer.
+    // ------------------------------------------------------------------
+    void UOrbitSaveGame::SerializeGameState(FBufferArchive& Ar)
+    {
+        // 1. Header – a simple magic number + version.
+        //    This allows us to detect corrupted or incompatible files.
+        static constexpr uint32 MagicNumber = 0x4F524954; // "ORIT"
+        static constexpr uint32 Version = 1;
 
-    return true;
+        Ar << MagicNumber;
+        Ar << Version;
+
+        // 2. Engine configuration
+        Ar << Config;
+
+        // 3. Physics simulation state
+        //    We assume OrbitPhysicsSimulation exposes a
+        //    Serialize(FArchive&) method that writes all
+        //    necessary data (rigid bodies, constraints, etc.).
+        Physics.Serialize(Ar);
+
+        // 4. Render core state
+        //    For the purposes of a save game we only need to
+        //    persist the camera position / orientation and any
+        //    other user‑controlled view state.
+        Renderer.Serialize(Ar);
+
+        // 5. Frame counter (optional – useful for debugging)
+        Ar << FrameNumber;
+    }
+
+    // ------------------------------------------------------------------
+    // Deserialize the game state from a binary buffer.
+    // ------------------------------------------------------------------
+    bool UOrbitSaveGame::DeserializeGameState(FMemoryReader& Ar)
+    {
+        // 1. Header – verify magic number & version.
+        uint32 MagicNumber = 0;
+        uint32 Version = 0;
+        Ar << MagicNumber;
+        Ar << Version;
+
+        if (MagicNumber != 0x4F524954 || Version != 1)
+        {
+            UE_LOG(LogTemp, Error, TEXT("OrbitSaveGame: Unsupported or corrupted file."));
+            return false;
+        }
+
+        // 2. Engine configuration
+        Ar << Config;
+
+        // 3. Physics simulation state
+        if (!Physics.Deserialize(Ar))
+        {
+            UE_LOG(LogTemp, Error, TEXT("OrbitSaveGame: Failed to deserialize physics state."));
+            return false;
+        }
+
+        // 4. Render core state
+        if (!Renderer.Deserialize(Ar))
+        {
+            UE_LOG(LogTemp, Error, TEXT("OrbitSaveGame: Failed to deserialize render state."));
+            return false;
+        }
+
+        // 5. Frame counter
+        Ar << FrameNumber;
+
+        return true;
+    }
+
+    // ------------------------------------------------------------------
+    // Public API – write the current state to disk.
+    // ------------------------------------------------------------------
+    bool UOrbitSaveGame::SaveToDisk()
+    {
+        FBufferArchive Ar;
+        SerializeGameState(Ar);
+
+        const FString FilePath = GetSaveFilePath();
+
+        // Write the buffer to disk.  FileHelper::SaveArrayToFile
+        // handles platform‑specific file I/O and returns true on success.
+        bool bSuccess = FFileHelper::SaveArrayToFile(
+            Ar,
+            *FilePath,
+            FFileHelper::EEncodingOptions::AutoDetect,
+            &IPlatformFile::GetPlatformPhysical(),
+            FILEWRITE_EvenIfReadOnly
+        );
+
+        if (!bSuccess)
+        {
+            UE_LOG(LogTemp, Error, TEXT("OrbitSaveGame: Failed to write file %s"), *FilePath);
+        }
+
+        // Free the memory used by the archive.
+        Ar.FlushCache();
+        Ar.Empty();
+
+        return bSuccess;
+    }
+
+    // ------------------------------------------------------------------
+    // Public API – load the state from disk.
+    // ------------------------------------------------------------------
+    bool UOrbitSaveGame::LoadFromDisk()
+    {
+        const FString FilePath = GetSaveFilePath();
+
+        // Load the file into a byte array.
+        TArray<uint8> FileData;
+        bool bSuccess = FFileHelper::LoadFileToArray(
+            FileData,
+            *FilePath,
+            FFileHelper::EEncodingOptions::AutoDetect,
+            &IPlatformFile::GetPlatformPhysical()
+        );
+
+        if (!bSuccess)
+        {
+            UE_LOG(LogTemp, Error, TEXT("OrbitSaveGame: Failed to read file %s"), *FilePath);
+            return false;
+        }
+
+        // Deserialize from the buffer.
+        FMemoryReader Ar(FileData, true);
+        bool bDeserialized = DeserializeGameState(Ar);
+
+        // Clean up the reader.
+        Ar.FlushCache();
+        Ar.Empty();
+
+        return bDeserialized;
+    }
+
+    // ------------------------------------------------------------------
+    // Helper: Reset the save game to a clean state.
+    // ------------------------------------------------------------------
+    void UOrbitSaveGame::Reset()
+    {
+        Config = EngineConfig{};
+        Physics.Reset();
+        Renderer.Reset();
+        FrameNumber = 0;
+    }
 }
