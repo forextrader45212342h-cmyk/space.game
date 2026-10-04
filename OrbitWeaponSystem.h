@@ -4,213 +4,112 @@
 #include "CoreMinimal.h"
 #include "Components/ActorComponent.h"
 #include "GameFramework/Actor.h"
+#include "TimerManager.h"
+#include "Kismet/GameplayStatics.h"
+#include "Engine/World.h"
 #include "DrawDebugHelpers.h"
 #include "OrbitWeaponSystem.generated.h"
 
 /**
  *  UOrbitWeaponSystem
+ *  ------------------
+ *  A reusable component that handles laser‑style ray‑cast weapons
+ *  as well as projectile‑based weapons.  It supports:
+ *      • Ray‑cast laser hit detection
+ *      • Projectile spawning with optional damage
+ *      • Cool‑down timer between shots
+ *      • Configurable damage, range, trace channel, and visual effects
  *
- *  A reusable component that implements a laser‑style weapon.
- *  It performs a raycast to detect hits, spawns a projectile
- *  (if a ProjectileClass is set), applies damage, and enforces
- *  a cooldown between shots.
- *
- *  The component is Blueprint‑spawnable and can be attached to
- *  any actor that owns a skeletal mesh with a muzzle socket.
+ *  The component is intended to be attached to any Actor that
+ *  should be able to fire a weapon (e.g. a player pawn or an AI
+ *  turret).  All properties are exposed to Blueprints for easy
+ *  tuning.
  */
-UCLASS(ClassGroup = (Custom), meta = (BlueprintSpawnableComponent))
+UCLASS( ClassGroup=(Custom), meta=(BlueprintSpawnableComponent) )
 class ORBIT_API UOrbitWeaponSystem : public UActorComponent
 {
 	GENERATED_BODY()
 
 public:
-	/** Default constructor */
 	UOrbitWeaponSystem();
 
-	/** Called when the game starts */
-	virtual void BeginPlay() override;
-
-	/**
-	 *  Fires the weapon.
-	 *
-	 *  @return true if the weapon was fired, false if still on cooldown.
-	 */
-	UFUNCTION(BlueprintCallable, Category = "Weapon")
+	/** Fire the weapon.  Returns true if a shot was fired. */
+	UFUNCTION(BlueprintCallable, Category="Weapon")
 	bool FireWeapon();
 
 protected:
-	/** Time between consecutive shots (seconds). */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Weapon|Cooldown")
-	float CooldownTime = 0.5f;
+	virtual void BeginPlay() override;
 
-	/** Timestamp of the last shot (in world time). */
-	float LastFireTime = -INFINITY;
+private:
+	/** Perform a ray‑cast from the muzzle and apply damage if hit. */
+	void PerformRaycast();
 
-	/** Projectile class to spawn when the weapon fires. */
-	UPROPERTY(EditDefaultsOnly, Category = "Weapon|Projectile")
+	/** Spawn a projectile actor at the muzzle location. */
+	void SpawnProjectile();
+
+	/** Start the cooldown timer. */
+	void StartCooldown();
+
+	/** Reset the ability to fire. */
+	void ResetCooldown();
+
+	/** Apply damage to the hit actor. */
+	void ApplyDamage(const FHitResult& Hit);
+
+	/** Helper to get the world location of the muzzle. */
+	FVector GetMuzzleLocation() const;
+
+	/** Helper to get the world rotation of the muzzle. */
+	FRotator GetMuzzleRotation() const;
+
+private:
+	/** The class of the projectile to spawn.  If null, no projectile is spawned. */
+	UPROPERTY(EditAnywhere, Category="Weapon|Projectile")
 	TSubclassOf<AActor> ProjectileClass;
 
-	/** Socket name on the owning mesh that represents the muzzle. */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Weapon|Muzzle")
-	FName MuzzleSocketName = FName(TEXT("Muzzle"));
+	/** Optional particle system to spawn as a laser beam. */
+	UPROPERTY(EditAnywhere, Category="Weapon|Laser")
+	UParticleSystem* LaserBeamEffect;
 
-	/** Damage applied to the first hit actor. */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Weapon|Damage")
+	/** Damage applied to the hit actor. */
+	UPROPERTY(EditAnywhere, Category="Weapon|Damage")
 	float Damage = 25.f;
 
-	/** Collision channel used for the laser raycast. */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Weapon|Trace")
+	/** Maximum range of the ray‑cast. */
+	UPROPERTY(EditAnywhere, Category="Weapon|Range")
+	float Range = 10000.f;
+
+	/** Cool‑down time between shots in seconds. */
+	UPROPERTY(EditAnywhere, Category="Weapon|Cooldown")
+	float CooldownTime = 0.5f;
+
+	/** Collision channel used for the ray‑cast. */
+	UPROPERTY(EditAnywhere, Category="Weapon|Trace")
 	TEnumAsByte<ECollisionChannel> TraceChannel = ECC_Visibility;
 
-	/** Optional material used to draw a debug laser. */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Weapon|Effects")
-	UMaterialInterface* LaserMaterial = nullptr;
+	/** Offset from the muzzle component along its forward axis. */
+	UPROPERTY(EditAnywhere, Category="Weapon|Muzzle")
+	float MuzzleOffset = 100.f;
 
-	/** Cached reference to the owning actor's mesh component. */
-	UPROPERTY()
-	USkeletalMeshComponent* OwnerMesh = nullptr;
+	/** Whether the weapon can currently fire. */
+	bool bCanFire = true;
 
-	/** Performs a raycast from the muzzle forward. */
-	bool PerformRaycast(FHitResult& OutHit) const;
+	/** Timer handle for the cooldown. */
+	FTimerHandle CooldownTimerHandle;
 
-	/** Spawns a projectile at the muzzle. */
-	void SpawnProjectile(const FVector& SpawnLocation, const FRotator& SpawnRotation) const;
+	/** Optional muzzle component.  If not set, the owner actor's root is used. */
+	UPROPERTY(EditAnywhere, Category="Weapon|Muzzle")
+	USceneComponent* MuzzleComponent;
 
-	/** Draws a debug laser line. */
-	void DrawLaser(const FVector& Start, const FVector& End) const;
+	/** Whether to spawn a projectile in addition to the ray‑cast. */
+	UPROPERTY(EditAnywhere, Category="Weapon|Projectile")
+	bool bSpawnProjectile = true;
+
+	/** Whether to spawn a laser beam effect. */
+	UPROPERTY(EditAnywhere, Category="Weapon|Laser")
+	bool bSpawnLaserBeam = true;
+
+	/** Whether to apply damage when the ray‑cast hits. */
+	UPROPERTY(EditAnywhere, Category="Weapon|Damage")
+	bool bApplyDamageOnHit = true;
 };
-
-// ---------------------------------------------------------------------------
-// Inline implementations
-// ---------------------------------------------------------------------------
-
-inline UOrbitWeaponSystem::UOrbitWeaponSystem()
-{
-	PrimaryComponentTick.bCanEverTick = false;
-}
-
-inline void UOrbitWeaponSystem::BeginPlay()
-{
-	Super::BeginPlay();
-
-	// Cache the owner's mesh component if it exists
-	if (AActor* Owner = GetOwner())
-	{
-		OwnerMesh = Owner->FindComponentByClass<USkeletalMeshComponent>();
-	}
-}
-
-inline bool UOrbitWeaponSystem::FireWeapon()
-{
-	// Check cooldown
-	const float CurrentTime = GetWorld()->GetTimeSeconds();
-	if (CurrentTime - LastFireTime < CooldownTime)
-	{
-		return false; // Still cooling down
-	}
-
-	// Update last fire time
-	LastFireTime = CurrentTime;
-
-	// Get muzzle world location and rotation
-	FVector MuzzleLocation = FVector::ZeroVector;
-	FRotator MuzzleRotation = FRotator::ZeroRotator;
-
-	if (OwnerMesh && OwnerMesh->DoesSocketExist(MuzzleSocketName))
-	{
-		MuzzleLocation = OwnerMesh->GetSocketLocation(MuzzleSocketName);
-		MuzzleRotation = OwnerMesh->GetSocketRotation(MuzzleSocketName);
-	}
-	else if (AActor* Owner = GetOwner())
-	{
-		// Fallback to actor's transform
-		MuzzleLocation = Owner->GetActorLocation();
-		MuzzleRotation = Owner->GetActorRotation();
-	}
-
-	// Perform raycast
-	FHitResult HitResult;
-	if (PerformRaycast(HitResult))
-	{
-		// Apply damage to the hit actor
-		if (AActor* HitActor = HitResult.GetActor())
-		{
-			UGameplayStatics::ApplyPointDamage(
-				HitActor,
-				Damage,
-				MuzzleRotation.Vector(),
-				HitResult,
-				GetOwner()->GetInstigatorController(),
-				GetOwner(),
-				nullptr // DamageType can be set if needed
-			);
-		}
-	}
-
-	// Spawn projectile if a class is set
-	if (ProjectileClass)
-	{
-		SpawnProjectile(MuzzleLocation, MuzzleRotation);
-	}
-
-	// Draw debug laser
-	DrawLaser(MuzzleLocation, HitResult.bBlockingHit ? HitResult.ImpactPoint : MuzzleLocation + MuzzleRotation.Vector() * 10000.f);
-
-	return true;
-}
-
-inline bool UOrbitWeaponSystem::PerformRaycast(FHitResult& OutHit) const
-{
-	if (!GetWorld() || !OwnerMesh)
-	{
-		return false;
-	}
-
-	FVector Start = OwnerMesh->GetSocketLocation(MuzzleSocketName);
-	FVector End = Start + OwnerMesh->GetSocketRotation(MuzzleSocketName).Vector() * 10000.f; // 10k units
-
-	FCollisionQueryParams Params;
-	Params.AddIgnoredActor(GetOwner());
-
-	return GetWorld()->LineTraceSingleByChannel(
-		OutHit,
-		Start,
-		End,
-		TraceChannel,
-		Params
-	);
-}
-
-inline void UOrbitWeaponSystem::SpawnProjectile(const FVector& SpawnLocation, const FRotator& SpawnRotation) const
-{
-	if (!GetWorld() || !ProjectileClass)
-	{
-		return;
-	}
-
-	FActorSpawnParameters SpawnParams;
-	SpawnParams.Owner = GetOwner();
-	SpawnParams.Instigator = GetOwner()->GetInstigator();
-
-	GetWorld()->SpawnActor<AActor>(ProjectileClass, SpawnLocation, SpawnRotation, SpawnParams);
-}
-
-inline void UOrbitWeaponSystem::DrawLaser(const FVector& Start, const FVector& End) const
-{
-	if (!GetWorld())
-	{
-		return;
-	}
-
-	FColor LaserColor = FColor::Red;
-	if (LaserMaterial)
-	{
-		// If a material is provided, use it to draw a dynamic line
-		DrawDebugLine(GetWorld(), Start, End, LaserColor, false, 0.1f, 0, 2.f);
-	}
-	else
-	{
-		// Default debug line
-		DrawDebugLine(GetWorld(), Start, End, LaserColor, false, 0.1f, 0, 2.f);
-	}
-}
