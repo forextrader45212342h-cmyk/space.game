@@ -1,220 +1,189 @@
-// OrbitVehicleController.cpp
-// 3‑D pitch / yaw / roll vehicle controller with physics, gravity, resistance and acceleration
-// UE5 C++ implementation
+// OrbitVehicleController.h
+#pragma once
 
+#include "CoreMinimal.h"
+#include "GameFramework/Pawn.h"
+#include "OrbitVehicleController.generated.h"
+
+/**
+ * A simple 3‑D vehicle controller that applies pitch, yaw, roll, gravity,
+ * drag (resistance) and acceleration using the physics engine.
+ */
+UCLASS()
+class ORBIT_API AOrbitVehicleController : public APawn
+{
+    GENERATED_BODY()
+
+public:
+    AOrbitVehicleController();
+
+    /** Called every frame */
+    virtual void Tick(float DeltaTime) override;
+
+    /** Bind input actions */
+    virtual void SetupPlayerInputComponent(class UInputComponent* PlayerInputComponent) override;
+
+protected:
+    virtual void BeginPlay() override;
+
+private:
+    /* Components ----------------------------------------------------------- */
+    /** The physical body of the vehicle */
+    UPROPERTY(VisibleAnywhere, Category = "Vehicle")
+    UStaticMeshComponent* VehicleBody;
+
+    /* Movement parameters --------------------------------------------------- */
+    UPROPERTY(EditAnywhere, Category = "Movement")
+    float MaxSpeed = 2000.f;          // Max linear speed (cm/s)
+
+    UPROPERTY(EditAnywhere, Category = "Movement")
+    float Acceleration = 5000.f;      // Force applied per unit input
+
+    UPROPERTY(EditAnywhere, Category = "Movement")
+    float DragCoefficient = 0.1f;     // Linear drag coefficient
+
+    UPROPERTY(EditAnywhere, Category = "Rotation")
+    float TurnRate = 45.f;            // Yaw rate (degrees per second)
+
+    UPROPERTY(EditAnywhere, Category = "Rotation")
+    float PitchRate = 30.f;           // Pitch rate (degrees per second)
+
+    UPROPERTY(EditAnywhere, Category = "Rotation")
+    float RollRate = 20.f;            // Roll rate (degrees per second)
+
+    /* Input state ----------------------------------------------------------- */
+    float ForwardInput = 0.f;
+    float RightInput   = 0.f;
+    float TurnInput    = 0.f;
+    float PitchInput   = 0.f;
+    float RollInput    = 0.f;
+
+    /* Helper functions ----------------------------------------------------- */
+    void MoveForward(float Value);
+    void MoveRight(float Value);
+    void Turn(float Value);
+    void LookUp(float Value);
+    void Roll(float Value);
+};
+
+// OrbitVehicleController.cpp
 #include "OrbitVehicleController.h"
 #include "Components/StaticMeshComponent.h"
 #include "GameFramework/PlayerController.h"
 #include "Engine/World.h"
-#include "DrawDebugHelpers.h"
-
-//////////////////////////////////////////////////////////////////////////
-// Constructor
 
 AOrbitVehicleController::AOrbitVehicleController()
 {
-    // Enable ticking every frame
     PrimaryActorTick.bCanEverTick = true;
 
-    // Root component
-    RootComponent = CreateDefaultSubobject<USceneComponent>(TEXT("RootComponent"));
+    // Disable automatic controller rotation – we drive rotation manually
+    bUseControllerRotationYaw   = false;
+    bUseControllerRotationPitch = false;
+    bUseControllerRotationRoll  = false;
 
-    // Vehicle body
-    BodyMesh = CreateDefaultSubobject<UStaticMeshComponent>(TEXT("BodyMesh"));
-    BodyMesh->SetupAttachment(RootComponent);
-    BodyMesh->SetSimulatePhysics(true);
-    BodyMesh->SetEnableGravity(true);
-    BodyMesh->SetLinearDamping(0.0f);   // We'll apply custom drag
-    BodyMesh->SetAngularDamping(0.0f);  // We'll apply custom torque damping
-
-    // Parameters
-    MaxEngineForce = 5000.0f;          // Newtons
-    MaxBrakeForce = 8000.0f;           // Newtons
-    MaxSteerTorque = 2000.0f;          // N·m
-    DragCoefficient = 0.1f;           // Linear drag
-    AngularDragCoefficient = 0.05f;   // Angular drag
-    bUseCustomGravity = true;
-    CustomGravity = FVector(0.0f, 0.0f, -980.0f); // cm/s²
+    // Create the vehicle body component
+    VehicleBody = CreateDefaultSubobject<UStaticMeshComponent>(TEXT("VehicleBody"));
+    RootComponent = VehicleBody;
+    VehicleBody->SetSimulatePhysics(true);
+    VehicleBody->SetEnableGravity(true);
+    VehicleBody->SetMassOverrideInKg(NAME_None, 1500.f); // Rough mass of a small car
 }
-
-//////////////////////////////////////////////////////////////////////////
-// BeginPlay
 
 void AOrbitVehicleController::BeginPlay()
 {
     Super::BeginPlay();
-
-    // Ensure physics is enabled
-    if (!BodyMesh->IsSimulatingPhysics())
-    {
-        BodyMesh->SetSimulatePhysics(true);
-    }
-
-    // Disable default gravity if using custom gravity
-    if (bUseCustomGravity)
-    {
-        BodyMesh->SetEnableGravity(false);
-    }
 }
-
-//////////////////////////////////////////////////////////////////////////
-// Tick
 
 void AOrbitVehicleController::Tick(float DeltaTime)
 {
     Super::Tick(DeltaTime);
 
-    // Apply custom gravity if enabled
-    if (bUseCustomGravity)
+    /* --------------------------------------------------------------------
+     * 1. Apply forward/backward and lateral forces
+     * -------------------------------------------------------------------- */
+    if (!FMath::IsNearlyZero(ForwardInput))
     {
-        BodyMesh->AddForce(CustomGravity * BodyMesh->GetMass());
+        FVector Force = VehicleBody->GetForwardVector() * ForwardInput * Acceleration;
+        VehicleBody->AddForce(Force);
     }
 
-    // Apply linear drag (resistance)
-    FVector Velocity = BodyMesh->GetPhysicsLinearVelocity();
-    FVector DragForce = -DragCoefficient * Velocity;
-    BodyMesh->AddForce(DragForce);
+    if (!FMath::IsNearlyZero(RightInput))
+    {
+        FVector Force = VehicleBody->GetRightVector() * RightInput * Acceleration;
+        VehicleBody->AddForce(Force);
+    }
 
-    // Apply angular drag (resistance)
-    FVector AngularVelocity = BodyMesh->GetPhysicsAngularVelocityInRadians();
-    FVector AngularDragTorque = -AngularDragCoefficient * AngularVelocity;
-    BodyMesh->AddTorqueInRadians(AngularDragTorque);
+    /* --------------------------------------------------------------------
+     * 2. Apply linear drag (resistance)
+     * -------------------------------------------------------------------- */
+    FVector Velocity = VehicleBody->GetPhysicsLinearVelocity();
+    FVector Drag = -Velocity * DragCoefficient;
+    VehicleBody->AddForce(Drag);
 
-    // Clamp velocity to avoid runaway speeds
-    const float MaxSpeed = 2000.0f; // cm/s
+    /* --------------------------------------------------------------------
+     * 3. Apply torque for yaw, pitch, roll
+     * -------------------------------------------------------------------- */
+    if (!FMath::IsNearlyZero(TurnInput))
+    {
+        FVector Torque = VehicleBody->GetUpVector() * TurnInput * FMath::DegreesToRadians(TurnRate) * 1000.f;
+        VehicleBody->AddTorqueInRadians(Torque);
+    }
+
+    if (!FMath::IsNearlyZero(PitchInput))
+    {
+        FVector Torque = VehicleBody->GetRightVector() * PitchInput * FMath::DegreesToRadians(PitchRate) * 1000.f;
+        VehicleBody->AddTorqueInRadians(Torque);
+    }
+
+    if (!FMath::IsNearlyZero(RollInput))
+    {
+        FVector Torque = VehicleBody->GetForwardVector() * RollInput * FMath::DegreesToRadians(RollRate) * 1000.f;
+        VehicleBody->AddTorqueInRadians(Torque);
+    }
+
+    /* --------------------------------------------------------------------
+     * 4. Clamp speed to MaxSpeed
+     * -------------------------------------------------------------------- */
     if (Velocity.Size() > MaxSpeed)
     {
-        BodyMesh->SetPhysicsLinearVelocity(Velocity.GetClampedToMaxSize(MaxSpeed));
+        FVector NewVel = Velocity.GetSafeNormal() * MaxSpeed;
+        VehicleBody->SetPhysicsLinearVelocity(NewVel);
     }
-
-    // Optional: Visual debugging
-    // DrawDebugLine(GetWorld(), GetActorLocation(), GetActorLocation() + Velocity, FColor::Green, false, -1, 0, 2.0f);
 }
-
-//////////////////////////////////////////////////////////////////////////
-// Input binding
 
 void AOrbitVehicleController::SetupPlayerInputComponent(UInputComponent* PlayerInputComponent)
 {
     Super::SetupPlayerInputComponent(PlayerInputComponent);
 
-    // Movement
+    // Bind movement axes (ensure these are defined in Project Settings → Input)
     PlayerInputComponent->BindAxis("MoveForward", this, &AOrbitVehicleController::MoveForward);
-    PlayerInputComponent->BindAxis("MoveRight", this, &AOrbitVehicleController::MoveRight);
-
-    // Rotation
-    PlayerInputComponent->BindAxis("Turn", this, &AOrbitVehicleController::Turn);
-    PlayerInputComponent->BindAxis("LookUp", this, &AOrbitVehicleController::LookUp);
-    PlayerInputComponent->BindAxis("Roll", this, &AOrbitVehicleController::Roll);
-
-    // Braking
-    PlayerInputComponent->BindAction("Brake", IE_Pressed, this, &AOrbitVehicleController::BrakePressed);
-    PlayerInputComponent->BindAction("Brake", IE_Released, this, &AOrbitVehicleController::BrakeReleased);
+    PlayerInputComponent->BindAxis("MoveRight",   this, &AOrbitVehicleController::MoveRight);
+    PlayerInputComponent->BindAxis("Turn",        this, &AOrbitVehicleController::Turn);
+    PlayerInputComponent->BindAxis("LookUp",      this, &AOrbitVehicleController::LookUp);
+    PlayerInputComponent->BindAxis("Roll",        this, &AOrbitVehicleController::Roll);
 }
-
-//////////////////////////////////////////////////////////////////////////
-// Movement
 
 void AOrbitVehicleController::MoveForward(float Value)
 {
-    if (FMath::IsNearlyZero(Value)) return;
-
-    // Forward vector in world space
-    FVector Force = GetActorForwardVector() * Value * MaxEngineForce;
-    BodyMesh->AddForce(Force);
+    ForwardInput = FMath::Clamp(Value, -1.f, 1.f);
 }
 
 void AOrbitVehicleController::MoveRight(float Value)
 {
-    if (FMath::IsNearlyZero(Value)) return;
-
-    // Right vector in world space
-    FVector Force = GetActorRightVector() * Value * MaxEngineForce;
-    BodyMesh->AddForce(Force);
+    RightInput = FMath::Clamp(Value, -1.f, 1.f);
 }
-
-//////////////////////////////////////////////////////////////////////////
-// Rotation
 
 void AOrbitVehicleController::Turn(float Value)
 {
-    if (FMath::IsNearlyZero(Value)) return;
-
-    // Yaw torque around world Z
-    FVector Torque = FVector(0.0f, 0.0f, Value * MaxSteerTorque);
-    BodyMesh->AddTorqueInRadians(Torque);
+    TurnInput = FMath::Clamp(Value, -1.f, 1.f);
 }
 
 void AOrbitVehicleController::LookUp(float Value)
 {
-    if (FMath::IsNearlyZero(Value)) return;
-
-    // Pitch torque around world Y
-    FVector Torque = FVector(0.0f, Value * MaxSteerTorque, 0.0f);
-    BodyMesh->AddTorqueInRadians(Torque);
+    PitchInput = FMath::Clamp(Value, -1.f, 1.f);
 }
 
 void AOrbitVehicleController::Roll(float Value)
 {
-    if (FMath::IsNearlyZero(Value)) return;
-
-    // Roll torque around world X
-    FVector Torque = FVector(Value * MaxSteerTorque, 0.0f, 0.0f);
-    BodyMesh->AddTorqueInRadians(Torque);
-}
-
-//////////////////////////////////////////////////////////////////////////
-// Braking
-
-void AOrbitVehicleController::BrakePressed()
-{
-    bBraking = true;
-}
-
-void AOrbitVehicleController::BrakeReleased()
-{
-    bBraking = false;
-}
-
-void AOrbitVehicleController::ApplyBrake(float DeltaTime)
-{
-    if (!bBraking) return;
-
-    FVector Velocity = BodyMesh->GetPhysicsLinearVelocity();
-    FVector BrakeForce = -FMath::Clamp(Velocity.Size(), 0.0f, MaxBrakeForce) * Velocity.GetSafeNormal();
-    BodyMesh->AddForce(BrakeForce);
-}
-
-//////////////////////////////////////////////////////////////////////////
-// Helper: Called every tick to apply brake if needed
-
-void AOrbitVehicleController::Tick(float DeltaTime)
-{
-    Super::Tick(DeltaTime);
-
-    // Apply custom gravity
-    if (bUseCustomGravity)
-    {
-        BodyMesh->AddForce(CustomGravity * BodyMesh->GetMass());
-    }
-
-    // Apply linear drag
-    FVector Velocity = BodyMesh->GetPhysicsLinearVelocity();
-    FVector DragForce = -DragCoefficient * Velocity;
-    BodyMesh->AddForce(DragForce);
-
-    // Apply angular drag
-    FVector AngularVelocity = BodyMesh->GetPhysicsAngularVelocityInRadians();
-    FVector AngularDragTorque = -AngularDragCoefficient * AngularVelocity;
-    BodyMesh->AddTorqueInRadians(AngularDragTorque);
-
-    // Apply brake
-    ApplyBrake(DeltaTime);
-
-    // Clamp speed
-    const float MaxSpeed = 2000.0f; // cm/s
-    if (Velocity.Size() > MaxSpeed)
-    {
-        BodyMesh->SetPhysicsLinearVelocity(Velocity.GetClampedToMaxSize(MaxSpeed));
-    }
+    RollInput = FMath::Clamp(Value, -1.f, 1.f);
 }
