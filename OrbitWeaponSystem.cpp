@@ -1,127 +1,179 @@
 // OrbitWeaponSystem.cpp
-// UE5 C++ implementation of a laser weapon system that performs line‑traces,
-// applies damage, records telemetry, and spawns impact effects.
+// ---------------
+//  Implements a simple laser weapon that performs a line‑trace, applies damage
+//  and records telemetry data for each hit.
+//
+//  The implementation is intentionally lightweight so that it can be dropped
+//  into any UE5 project that already has a component or actor that owns a
+//  UOrbitWeaponComponent.  The component exposes a single public method
+//  `FireLaser()` that can be called from a player controller, AI, or any
+//  other gameplay code.
+//
+//  Telemetry is recorded via a custom UE_LOG category and a simple struct
+//  that can be extended or sent to a remote analytics service if desired.
 
 #include "OrbitWeaponSystem.h"
+
 #include "GameFramework/Actor.h"
 #include "Engine/World.h"
 #include "DrawDebugHelpers.h"
 #include "Kismet/GameplayStatics.h"
-#include "Components/PrimitiveComponent.h"
-#include "Particles/ParticleSystem.h"
-#include "TimerManager.h"
-#include "Engine/EngineTypes.h"
-#include "GameFramework/DamageType.h"
-#include "Logging/LogMacros.h"
+#include "Components/SceneComponent.h"
+#include "GameFramework/PlayerController.h"
+#include "Engine/Engine.h"
 
-// Log category for telemetry
 DEFINE_LOG_CATEGORY_STATIC(LogOrbitWeapon, Log, All);
 
 // -----------------------------------------------------------------------------
-// UOrbitWeaponSystem
+//  Telemetry struct
 // -----------------------------------------------------------------------------
-UOrbitWeaponSystem::UOrbitWeaponSystem()
+struct FWeaponTelemetry
+{
+    FVector ImpactPoint;
+    FVector ImpactNormal;
+    AActor* HitActor;
+    float Damage;
+
+    FWeaponTelemetry()
+        : ImpactPoint(FVector::ZeroVector)
+        , ImpactNormal(FVector::ZeroVector)
+        , HitActor(nullptr)
+        , Damage(0.f)
+    {}
+};
+
+// -----------------------------------------------------------------------------
+//  UOrbitWeaponComponent
+// -----------------------------------------------------------------------------
+UOrbitWeaponComponent::UOrbitWeaponComponent()
 {
     PrimaryComponentTick.bCanEverTick = false;
 
-    // Default values
-    LaserRange = 10000.f;
-    DamageAmount = 25.f;
-    bAutoFire = false;
-    FireRate = 0.2f; // 5 shots per second
-    ImpactEffect = nullptr;
+    // Default values – can be overridden in the editor or by the owning actor
+    Damage = 25.f;
+    TraceDistance = 10000.f;          // 10 000 units (~10 m)
+    TraceChannel = ECC_Visibility;    // Use visibility channel for simplicity
+    bDebugDraw = true;
 }
 
-void UOrbitWeaponSystem::BeginPlay()
+void UOrbitWeaponComponent::BeginPlay()
 {
     Super::BeginPlay();
 
-    if (bAutoFire)
-    {
-        GetWorld()->GetTimerManager().SetTimer(FireTimerHandle, this, &UOrbitWeaponSystem::FireLaser, FireRate, true);
-    }
+    // Cache the owner actor for later use
+    OwnerActor = GetOwner();
 }
 
-void UOrbitWeaponSystem::FireLaser()
+void UOrbitWeaponComponent::FireLaser()
 {
-    AActor* Owner = GetOwner();
-    if (!Owner) return;
+    if (!OwnerActor)
+    {
+        UE_LOG(LogOrbitWeapon, Warning, TEXT("UOrbitWeaponComponent has no owner!"));
+        return;
+    }
 
-    // Determine start and end points
-    FVector MuzzleLocation = Owner->GetActorLocation();
-    FRotator MuzzleRotation = Owner->GetActorRotation();
-    FVector End = MuzzleLocation + MuzzleRotation.Vector() * LaserRange;
+    // 1. Determine start and end points of the trace
+    FVector Start = GetComponentLocation();
+    FVector Forward = GetComponentRotation().Vector();
+    FVector End   = Start + Forward * TraceDistance;
 
-    // Perform line trace
-    FHitResult HitResult;
+    // 2. Setup query parameters
     FCollisionQueryParams QueryParams;
-    QueryParams.AddIgnoredActor(Owner);
-    QueryParams.bTraceComplex = true;
+    QueryParams.AddIgnoredActor(OwnerActor);          // Don't hit ourselves
+    QueryParams.bTraceComplex = true;                // Hit complex geometry
     QueryParams.bReturnPhysicalMaterial = false;
 
+    // 3. Perform the line trace
+    FHitResult HitResult;
     bool bHit = GetWorld()->LineTraceSingleByChannel(
         HitResult,
-        MuzzleLocation,
+        Start,
         End,
-        ECC_Visibility,
+        TraceChannel,
         QueryParams
     );
 
-    // Debug line
-    DrawDebugLine(GetWorld(), MuzzleLocation, End, FColor::Red, false, 1.f, 0, 1.f);
-
-    // Telemetry: log the shot
-    Telemetry_LogShot(MuzzleLocation, End, bHit, HitResult);
-
-    if (bHit)
+    // 4. Debug draw the trace (optional)
+    if (bDebugDraw)
     {
-        // Apply damage
-        UGameplayStatics::ApplyPointDamage(
-            HitResult.GetActor(),
-            DamageAmount,
-            MuzzleRotation.Vector(),
-            HitResult,
-            Owner->GetInstigatorController(),
-            Owner,
-            UDamageType::StaticClass()
+        FColor TraceColor = bHit ? FColor::Red : FColor::Green;
+        DrawDebugLine(
+            GetWorld(),
+            Start,
+            bHit ? HitResult.ImpactPoint : End,
+            TraceColor,
+            false,
+            2.0f,
+            0,
+            1.0f
         );
 
-        // Spawn impact effect
-        if (ImpactEffect)
+        if (bHit)
         {
-            UGameplayStatics::SpawnEmitterAtLocation(
+            DrawDebugSphere(
                 GetWorld(),
-                ImpactEffect,
                 HitResult.ImpactPoint,
-                HitResult.ImpactNormal.Rotation(),
-                true
+                8.f,
+                12,
+                FColor::Yellow,
+                false,
+                2.0f
             );
         }
     }
+
+    // 5. If we hit something, apply damage and record telemetry
+    if (bHit && HitResult.GetActor())
+    {
+        // Apply point damage – this will trigger any damage handlers on the hit actor
+        UGameplayStatics::ApplyPointDamage(
+            HitResult.GetActor(),
+            Damage,
+            Forward,
+            HitResult,
+            OwnerActor->GetInstigatorController(),
+            this,
+            DamageType
+        );
+
+        // Record telemetry
+        FWeaponTelemetry Telemetry;
+        Telemetry.ImpactPoint = HitResult.ImpactPoint;
+        Telemetry.ImpactNormal = HitResult.ImpactNormal;
+        Telemetry.HitActor = HitResult.GetActor();
+        Telemetry.Damage = Damage;
+
+        LogTelemetry(Telemetry);
+    }
 }
 
-void UOrbitWeaponSystem::Telemetry_LogShot(const FVector& Start, const FVector& End, bool bHit, const FHitResult& Hit)
+void UOrbitWeaponComponent::LogTelemetry(const FWeaponTelemetry& Telemetry)
 {
-    // Simple telemetry: log to console and optionally send to a telemetry manager
-    FString HitInfo = bHit
-        ? FString::Printf(TEXT("Hit %s at %s"), *Hit.GetActor()->GetName(), *Hit.ImpactPoint.ToString())
-        : TEXT("No hit");
+    if (!Telemetry.HitActor)
+    {
+        UE_LOG(LogOrbitWeapon, Warning, TEXT("Telemetry: No actor hit."));
+        return;
+    }
 
-    UE_LOG(LogOrbitWeapon, Log, TEXT("Laser fired from %s to %s. %s"),
-        *Start.ToString(), *End.ToString(), *HitInfo);
+    UE_LOG(
+        LogOrbitWeapon,
+        Log,
+        TEXT("Laser hit %s at %s (normal %s) dealing %.1f damage."),
+        *Telemetry.HitActor->GetName(),
+        *Telemetry.ImpactPoint.ToString(),
+        *Telemetry.ImpactNormal.ToString(),
+        Telemetry.Damage
+    );
 
-    // Example of sending data to a telemetry system (pseudo-code)
-    // TelemetryManager::Get()->RecordEvent(TEXT("LaserShot"), {
-    //     { TEXT("Start"), Start },
-    //     { TEXT("End"), End },
-    //     { TEXT("Hit"), bHit },
-    //     { TEXT("HitActor"), bHit ? Hit.GetActor()->GetName() : TEXT("") }
-    // });
+    // TODO: Push telemetry to a remote analytics service if required.
+    // Example:
+    // AnalyticsSubsystem->RecordEvent(TEXT("LaserHit"), Telemetry);
 }
 
 // -----------------------------------------------------------------------------
-// UOrbitWeaponSystem.h
+//  OrbitWeaponSystem.h
 // -----------------------------------------------------------------------------
+/*
 #pragma once
 
 #include "CoreMinimal.h"
@@ -129,44 +181,45 @@ void UOrbitWeaponSystem::Telemetry_LogShot(const FVector& Start, const FVector& 
 #include "OrbitWeaponSystem.generated.h"
 
 UCLASS(ClassGroup=(Custom), meta=(BlueprintSpawnableComponent))
-class YOURGAME_API UOrbitWeaponSystem : public UActorComponent
+class ORBIT_API UOrbitWeaponComponent : public UActorComponent
 {
     GENERATED_BODY()
 
 public:
-    UOrbitWeaponSystem();
+    UOrbitWeaponComponent();
 
-    /** Fires a laser beam. */
-    UFUNCTION(BlueprintCallable, Category = "Weapon")
+    /** Fires the laser – performs a line trace, applies damage, and logs telemetry. */
+    UFUNCTION(BlueprintCallable, Category="Weapon")
     void FireLaser();
 
 protected:
     virtual void BeginPlay() override;
 
 private:
-    /** Telemetry helper. */
-    void Telemetry_LogShot(const FVector& Start, const FVector& End, bool bHit, const FHitResult& Hit);
+    /** Applies damage to the hit actor and logs telemetry. */
+    void LogTelemetry(const struct FWeaponTelemetry& Telemetry);
 
-    /** Timer handle for auto‑fire. */
-    FTimerHandle FireTimerHandle;
+    /** Cached owner actor. */
+    AActor* OwnerActor = nullptr;
 
-    /** Range of the laser. */
-    UPROPERTY(EditDefaultsOnly, Category = "Weapon")
-    float LaserRange;
+    /** Damage dealt by the laser. */
+    UPROPERTY(EditAnywhere, Category="Weapon")
+    float Damage = 25.f;
 
-    /** Damage dealt per hit. */
-    UPROPERTY(EditDefaultsOnly, Category = "Weapon")
-    float DamageAmount;
+    /** Maximum trace distance. */
+    UPROPERTY(EditAnywhere, Category="Weapon")
+    float TraceDistance = 10000.f;
 
-    /** Whether the weapon should auto‑fire. */
-    UPROPERTY(EditDefaultsOnly, Category = "Weapon")
-    bool bAutoFire;
+    /** Collision channel used for the trace. */
+    UPROPERTY(EditAnywhere, Category="Weapon")
+    TEnumAsByte<ECollisionChannel> TraceChannel = ECC_Visibility;
 
-    /** Fire rate in seconds. */
-    UPROPERTY(EditDefaultsOnly, Category = "Weapon")
-    float FireRate;
+    /** Whether to draw debug lines. */
+    UPROPERTY(EditAnywhere, Category="Weapon")
+    bool bDebugDraw = true;
 
-    /** Particle system to spawn on impact. */
-    UPROPERTY(EditDefaultsOnly, Category = "Effects")
-    UParticleSystem* ImpactEffect;
+    /** Damage type used when applying damage. */
+    UPROPERTY(EditDefaultsOnly, Category="Weapon")
+    TSubclassOf<UDamageType> DamageType = UDamageType::StaticClass();
 };
+*/
