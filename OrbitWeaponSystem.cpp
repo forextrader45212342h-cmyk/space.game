@@ -1,135 +1,205 @@
 // OrbitWeaponSystem.cpp
-// Implements laser firing, line‑trace damage, and telemetry logging.
+// UE5 C++ implementation of a laser weapon system that performs line‑traces,
+// applies damage, logs telemetry, and spawns impact effects.
 
 #include "OrbitWeaponSystem.h"
-#include "Engine/World.h"
 #include "GameFramework/Actor.h"
 #include "Kismet/GameplayStatics.h"
+#include "Engine/World.h"
 #include "DrawDebugHelpers.h"
+#include "Particles/ParticleSystem.h"
+#include "TimerManager.h"
+#include "Engine/Engine.h"
+#include "GameFramework/DamageType.h"
 #include "Components/SceneComponent.h"
-#include "Components/StaticMeshComponent.h"
-#include "OrbitTelemetry.h"          // Custom telemetry header
-#include "OrbitDamageTypes.h"        // Custom damage type header
 
-// -----------------------------------------------------------------------------
-// Telemetry helper
-// -----------------------------------------------------------------------------
+//////////////////////////////////////////////////////////////////////////
+// Telemetry
+
+struct FLaserTelemetry
+{
+    FVector Start;
+    FVector End;
+    bool bHit;
+    float DamageDealt;
+    float HitDistance;
+    FString HitActorName;
+
+    FLaserTelemetry()
+        : Start(FVector::ZeroVector)
+        , End(FVector::ZeroVector)
+        , bHit(false)
+        , DamageDealt(0.f)
+        , HitDistance(0.f)
+        , HitActorName(TEXT(""))
+    {}
+};
+
 static void LogLaserTelemetry(const FLaserTelemetry& Telemetry)
 {
-    // Simple console log – replace with your telemetry sink if needed
-    UE_LOG(LogOrbit, Log,
-        TEXT("Laser hit: %s | Location: %s | Damage: %.1f | Normal: %s"),
-        *Telemetry.HitActorName,
-        *Telemetry.HitLocation.ToString(),
-        Telemetry.Damage,
-        *Telemetry.HitNormal.ToString());
+    UE_LOG(LogTemp, Log,
+        TEXT("[LaserTelemetry] Start: %s, End: %s, Hit: %s, Damage: %.2f, Distance: %.2f, Actor: %s"),
+        *Telemetry.Start.ToString(),
+        *Telemetry.End.ToString(),
+        Telemetry.bHit ? TEXT("Yes") : TEXT("No"),
+        Telemetry.DamageDealt,
+        Telemetry.HitDistance,
+        *Telemetry.HitActorName);
 }
 
-// -----------------------------------------------------------------------------
-// Firing logic
-// -----------------------------------------------------------------------------
-void UOrbitWeaponSystem::FireLaser()
+//////////////////////////////////////////////////////////////////////////
+// AOrbitWeaponSystem
+
+AOrbitWeaponSystem::AOrbitWeaponSystem()
 {
-    if (!Owner || !Owner->GetWorld())
+    PrimaryActorTick.bCanEverTick = true;
+
+    // Root component
+    RootComponent = CreateDefaultSubobject<USceneComponent>(TEXT("RootComponent"));
+
+    // Default values
+    LaserRange = 10000.f;
+    DamageAmount = 25.f;
+    FireRate = 0.2f; // 5 shots per second
+    bContinuousFire = false;
+    bIsFiring = false;
+}
+
+void AOrbitWeaponSystem::BeginPlay()
+{
+    Super::BeginPlay();
+
+    if (bContinuousFire)
     {
-        return;
+        StartContinuousFire();
+    }
+}
+
+void AOrbitWeaponSystem::Tick(float DeltaTime)
+{
+    Super::Tick(DeltaTime);
+}
+
+void AOrbitWeaponSystem::StartContinuousFire()
+{
+    if (!bIsFiring)
+    {
+        bIsFiring = true;
+        GetWorldTimerManager().SetTimer(FireTimerHandle, this, &AOrbitWeaponSystem::FireLaser, FireRate, true, 0.f);
+    }
+}
+
+void AOrbitWeaponSystem::StopContinuousFire()
+{
+    if (bIsFiring)
+    {
+        bIsFiring = false;
+        GetWorldTimerManager().ClearTimer(FireTimerHandle);
+    }
+}
+
+void AOrbitWeaponSystem::FireLaser()
+{
+    // 1. Perform line trace
+    FHitResult HitResult;
+    FVector Start = GetActorLocation();
+    FVector ForwardVector = GetActorForwardVector();
+    FVector End = Start + (ForwardVector * LaserRange);
+
+    bool bHit = PerformLineTrace(Start, End, HitResult);
+
+    // 2. Apply damage if hit
+    float DamageDealt = 0.f;
+    if (bHit)
+    {
+        DamageDealt = ApplyDamage(HitResult);
     }
 
-    // 1. Get muzzle world transform
-    const FVector MuzzleLocation = MuzzleComponent->GetComponentLocation();
-    const FRotator MuzzleRotation = MuzzleComponent->GetComponentRotation();
+    // 3. Spawn impact effect
+    SpawnImpactEffect(bHit ? HitResult.ImpactPoint : End);
 
-    // 2. Compute end point
-    const FVector End = MuzzleLocation + MuzzleRotation.Vector() * LaserRange;
+    // 4. Log telemetry
+    FLaserTelemetry Telemetry;
+    Telemetry.Start = Start;
+    Telemetry.End = End;
+    Telemetry.bHit = bHit;
+    Telemetry.DamageDealt = DamageDealt;
+    Telemetry.HitDistance = bHit ? HitResult.Distance : LaserRange;
+    Telemetry.HitActorName = bHit ? HitResult.GetActor()->GetName() : TEXT("None");
+    LogLaserTelemetry(Telemetry);
 
-    // 3. Setup query params
+    // 5. Debug drawing
+    DrawDebugLaser(Start, End, bHit, HitResult);
+}
+
+bool AOrbitWeaponSystem::PerformLineTrace(const FVector& Start, const FVector& End, FHitResult& OutHit)
+{
     FCollisionQueryParams QueryParams;
-    QueryParams.AddIgnoredActor(Owner);
+    QueryParams.AddIgnoredActor(this);
+    if (GetOwner())
+    {
+        QueryParams.AddIgnoredActor(GetOwner());
+    }
     QueryParams.bTraceComplex = true;
     QueryParams.bReturnPhysicalMaterial = false;
 
-    // 4. Perform line trace
-    FHitResult HitResult;
-    const bool bHit = Owner->GetWorld()->LineTraceSingleByChannel(
-        HitResult,
-        MuzzleLocation,
+    bool bHit = GetWorld()->LineTraceSingleByChannel(
+        OutHit,
+        Start,
         End,
         ECC_Visibility,
         QueryParams
     );
 
-    // 5. Draw debug line (optional)
-    DrawDebugLine(
-        Owner->GetWorld(),
-        MuzzleLocation,
-        bHit ? HitResult.ImpactPoint : End,
-        bHit ? FColor::Red : FColor::Green,
-        false,
-        2.0f,
-        0,
-        1.0f
-    );
+    return bHit;
+}
 
-    // 6. Telemetry data
-    FLaserTelemetry Telemetry;
-    Telemetry.HitActorName = bHit && HitResult.GetActor()
-        ? HitResult.GetActor()->GetName()
-        : TEXT("None");
-    Telemetry.HitLocation = bHit ? HitResult.ImpactPoint : End;
-    Telemetry.HitNormal = bHit ? HitResult.ImpactNormal : FVector::ZeroVector;
-    Telemetry.Damage = 0.0f;
-
-    // 7. Apply damage if hit
-    if (bHit && HitResult.GetActor())
+float AOrbitWeaponSystem::ApplyDamage(const FHitResult& Hit)
+{
+    if (!Hit.GetActor())
     {
-        const float DamageAmount = BaseDamage;
-
-        // Apply damage using UE's damage system
-        UGameplayStatics::ApplyDamage(
-            HitResult.GetActor(),
-            DamageAmount,
-            Owner->GetInstigatorController(),
-            this,
-            UOrbitDamageType::StaticClass()
-        );
-
-        Telemetry.Damage = DamageAmount;
+        return 0.f;
     }
 
-    // 8. Log telemetry
-    LogLaserTelemetry(Telemetry);
+    // Use point damage for simplicity
+    UGameplayStatics::ApplyPointDamage(
+        Hit.GetActor(),
+        DamageAmount,
+        Hit.TraceStart - Hit.TraceEnd, // Direction
+        Hit,
+        GetInstigatorController(),
+        this,
+        DamageTypeClass
+    );
+
+    return DamageAmount;
 }
 
-// -----------------------------------------------------------------------------
-// Constructor
-// -----------------------------------------------------------------------------
-UOrbitWeaponSystem::UOrbitWeaponSystem()
+void AOrbitWeaponSystem::SpawnImpactEffect(const FVector& ImpactLocation)
 {
-    PrimaryComponentTick.bCanEverTick = false;
+    if (!ImpactEffect)
+    {
+        return;
+    }
 
-    // Default values
-    BaseDamage = 25.0f;
-    LaserRange = 10000.0f; // 100 meters
-
-    // Create a default muzzle component
-    MuzzleComponent = CreateDefaultSubobject<USceneComponent>(TEXT("Muzzle"));
-    MuzzleComponent->SetupAttachment(this);
+    UGameplayStatics::SpawnEmitterAtLocation(
+        GetWorld(),
+        ImpactEffect,
+        ImpactLocation,
+        FRotator::ZeroRotator,
+        true
+    );
 }
 
-// -----------------------------------------------------------------------------
-// Called when the game starts
-// -----------------------------------------------------------------------------
-void UOrbitWeaponSystem::BeginPlay()
+void AOrbitWeaponSystem::DrawDebugLaser(const FVector& Start, const FVector& End, bool bHit, const FHitResult& Hit)
 {
-    Super::BeginPlay();
+#if ENABLE_DRAW_DEBUG
+    FColor LineColor = bHit ? FColor::Red : FColor::Green;
+    DrawDebugLine(GetWorld(), Start, End, LineColor, false, 0.1f, 0, 1.f);
 
-    Owner = GetOwner();
-}
-
-// -----------------------------------------------------------------------------
-// Public API to trigger a laser shot
-// -----------------------------------------------------------------------------
-void UOrbitWeaponSystem::TriggerLaser()
-{
-    FireLaser();
+    if (bHit)
+    {
+        DrawDebugSphere(GetWorld(), Hit.ImpactPoint, 10.f, 12, FColor::Yellow, false, 0.1f);
+    }
+#endif
 }
