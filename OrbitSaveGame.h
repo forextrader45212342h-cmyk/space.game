@@ -6,37 +6,35 @@
 #include "OrbitSaveGame.generated.h"
 
 /**
- *  USaveGame subclass that stores the player's fuel, score, current coordinates,
- *  and the list of ships that have been unlocked.
+ *  USaveGame subclass that stores the player's progress.
+ *
+ *  - Fuel: Current fuel level of the player's ship.
+ *  - Score: Total score accumulated.
+ *  - Coordinates: Current world position of the player.
+ *  - UnlockedShips: List of ship identifiers that the player has unlocked.
  */
-UCLASS(BlueprintType)
+UCLASS(BlueprintType, Blueprintable, Category = "Orbit|Save")
 class ORBIT_API UOrbitSaveGame : public USaveGame
 {
-	GENERATED_BODY()
+    GENERATED_BODY()
 
 public:
-	/** Default constructor */
-	UOrbitSaveGame()
-	{
-		Fuel = 0.0f;
-		Score = 0;
-		Coordinates = FVector::ZeroVector;
-		UnlockedShips.Empty();
-	}
+    /** Default constructor */
+    UOrbitSaveGame();
 
-	/** Current fuel level of the player */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SaveData")
-	float Fuel;
+    /** Current fuel level (0.0 – 1.0) */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Orbit|Save")
+    float Fuel = 0.0f;
 
-	/** Current score of the player */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SaveData")
-	int32 Score;
+    /** Total score earned by the player */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Orbit|Save")
+    int32 Score = 0;
 
-	/** Current world coordinates of the player */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SaveData")
-	FVector Coordinates;
+    /** Current world position of the player */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Orbit|Save")
+    FVector Coordinates = FVector::ZeroVector;
 
-	/** List of ship identifiers that have been unlocked */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SaveData")
-	TArray<FString> UnlockedShips;
+    /** List of ship identifiers that have been unlocked */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Orbit|Save")
+    TArray<FString> UnlockedShips;
 };
